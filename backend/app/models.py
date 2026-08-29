@@ -141,13 +141,16 @@ class Company(db.Model):
     website = db.Column(db.String(255), nullable=True) # Website
     contact_person_number = db.Column(db.String(30), nullable=True) # Contact Person Number
     contact_person_email = db.Column(db.String(120), nullable=True) # Contact Person Mail
-    employee_count = db.Column(db.Integer, nullable=True, default=0) # No. of Employees
+    no_of_hirings = db.Column(db.Integer, nullable=True, default=0) # No. of Hirings
+    ctc_lpa = db.Column(db.Float, nullable=True) # CTC in LPA (e.g. 12.0)
+    placed_students = db.Column(db.Integer, nullable=True, default=0) # No. of Placed Students (Drive Completed)
     google_maps_link = db.Column(db.Text, nullable=True) # Google Maps Location Link
-    company_address = db.Column(db.Text, nullable=True) # Backward compatibility
     status = db.Column(db.String(30), nullable=False, default='Cold') # 'Cold', 'Warm', 'Hot', 'Drive Completed'
     approval_status = db.Column(db.String(30), nullable=False, default='PENDING') # 'PENDING', 'APPROVED', 'REJECTED'
     
-    # Additional metadata fields for backward compatibility
+    # Backward compatibility fields
+    employee_count = db.Column(db.Integer, nullable=True, default=0)
+    company_address = db.Column(db.Text, nullable=True)
     industry = db.Column(db.String(80), nullable=True)
     contact_person = db.Column(db.String(120), nullable=True)
     package_offered = db.Column(db.String(50), nullable=True)
@@ -174,10 +177,12 @@ class Company(db.Model):
 
     @property
     def no_of_employees(self):
-        return self.employee_count or 0
+        return self.no_of_hirings or self.employee_count or 0
 
     def to_dict(self):
         maps_link = self.google_maps_link or self.company_address or ''
+        hirings = self.no_of_hirings if self.no_of_hirings is not None else (self.employee_count or 0)
+        
         return {
             'id': self.id,
             'name': self.name,
@@ -188,15 +193,18 @@ class Company(db.Model):
             'contact_phone': self.contact_person_number or self.contact_phone or '',
             'contact_person_email': self.contact_person_email or self.contact_email or '',
             'contact_email': self.contact_person_email or self.contact_email or '',
-            'employee_count': self.employee_count if self.employee_count is not None else 0,
-            'no_of_employees': self.employee_count if self.employee_count is not None else 0,
+            'no_of_hirings': hirings,
+            'employee_count': hirings,
+            'no_of_employees': hirings,
+            'ctc_lpa': round(self.ctc_lpa, 2) if self.ctc_lpa is not None else None,
+            'package_offered': f"{self.ctc_lpa} LPA" if self.ctc_lpa is not None else (self.package_offered or 'N/A'),
+            'placed_students': self.placed_students if self.placed_students is not None else 0,
             'google_maps_link': maps_link,
             'company_address': maps_link,
             'status': self.status,
             'approval_status': self.approval_status or 'PENDING',
             'industry': self.industry or 'Technology',
             'contact_person': self.contact_person or '',
-            'package_offered': self.package_offered or 'N/A',
             'drive_date': self.drive_date or 'TBD',
             'remarks': self.remarks or '',
             'faculty_in_charge': self.faculty_in_charge or 'Unassigned',
