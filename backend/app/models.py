@@ -53,9 +53,12 @@ class Student(db.Model):
     email = db.Column(db.String(120), nullable=True)
     phone = db.Column(db.String(30), nullable=True)
     
-    # Placement Status
-    placement_status = db.Column(db.String(50), nullable=True, default='Unplaced')
+    # Placement Status & Details
+    placement_status = db.Column(db.String(50), nullable=True, default='YET_TO_BE_PLACED')
+    placed_company_id = db.Column(db.Integer, nullable=True)
     placed_company = db.Column(db.String(120), nullable=True)
+    placed_ctc_lpa = db.Column(db.Float, nullable=True)
+    placement_date = db.Column(db.String(50), nullable=True)
     salary_package = db.Column(db.String(50), nullable=True)
     remarks = db.Column(db.Text, nullable=True)
     
@@ -82,7 +85,22 @@ class Student(db.Model):
     def dept(self):
         return self.department
 
+    def get_norm_placement_status(self):
+        """Return normalized placement status: 'PLACED' or 'YET_TO_BE_PLACED'"""
+        st = str(self.placement_status or '').strip().upper()
+        if st in ('PLACED', 'YES'):
+            return 'PLACED'
+        return 'YET_TO_BE_PLACED'
+
+    @staticmethod
+    def display_placement_status(norm_status: str) -> str:
+        """Convert internal status to user-facing display text"""
+        if norm_status == 'PLACED':
+            return 'Placed'
+        return 'Yet to be Placed'
+
     def to_summary_dict(self):
+        norm_status = self.get_norm_placement_status()
         return {
             'id': self.id,
             's_no': self.s_no or self.id,
@@ -92,10 +110,15 @@ class Student(db.Model):
             'dept': self.department,
             'gender': self.gender,
             'hosteller_status': self.hosteller_status,
-            'hosteller_day_scholar': self.hosteller_status
+            'hosteller_day_scholar': self.hosteller_status,
+            'placement_status': norm_status,
+            'placed_company_id': self.placed_company_id,
+            'placed_company': self.placed_company or 'N/A'
         }
 
     def to_full_dict(self):
+        norm_status = self.get_norm_placement_status()
+        ctc_str = f"{self.placed_ctc_lpa} LPA" if self.placed_ctc_lpa is not None else (self.salary_package or 'N/A')
         return {
             'id': self.id,
             's_no': self.s_no or self.id,
@@ -126,9 +149,13 @@ class Student(db.Model):
             'email': self.email or '',
             'phone': self.phone or '',
             'mobile_no': self.phone or '',
-            'placement_status': self.placement_status or 'Unplaced',
+            'placement_status': norm_status,
+            'placed_company_id': self.placed_company_id,
             'placed_company': self.placed_company or 'N/A',
-            'salary_package': self.salary_package or 'N/A',
+            'placed_company_name': self.placed_company or 'N/A',
+            'placed_ctc_lpa': round(self.placed_ctc_lpa, 2) if self.placed_ctc_lpa is not None else None,
+            'salary_package': ctc_str,
+            'placement_date': self.placement_date or '',
             'remarks': self.remarks or ''
         }
 
@@ -143,10 +170,22 @@ class Company(db.Model):
     contact_person_email = db.Column(db.String(120), nullable=True) # Contact Person Mail
     no_of_hirings = db.Column(db.Integer, nullable=True, default=0) # No. of Hirings
     ctc_lpa = db.Column(db.Float, nullable=True) # CTC in LPA (e.g. 12.0)
-    placed_students = db.Column(db.Integer, nullable=True, default=0) # No. of Placed Students (Drive Completed)
+    placed_students = db.Column(db.Integer, nullable=True, default=0) # No. of Placed Students
     google_maps_link = db.Column(db.Text, nullable=True) # Google Maps Location Link
+    jd_file_path = db.Column(db.String(500), nullable=True) # Storage path or reference for JD document
+    jd_file_name = db.Column(db.String(255), nullable=True) # Original uploaded JD filename
     status = db.Column(db.String(30), nullable=False, default='Cold') # 'Cold', 'Warm', 'Hot', 'Drive Completed'
     approval_status = db.Column(db.String(30), nullable=False, default='PENDING') # 'PENDING', 'APPROVED', 'REJECTED'
+    
+    # Registration Link Token and Status
+    registration_token = db.Column(db.String(64), unique=True, nullable=True)
+    registration_link_status = db.Column(db.String(20), nullable=False, default='INACTIVE') # 'ACTIVE', 'INACTIVE'
+
+    # Extended fields from Companies_List template
+    job_title = db.Column(db.Text, nullable=True) # Job Title / Role
+    job_status = db.Column(db.String(50), nullable=True) # Job Status
+    jd_summary = db.Column(db.Text, nullable=True) # Job Description Summary
+    jd_pdf_link = db.Column(db.Text, nullable=True) # JD PDF Link
     
     # Backward compatibility fields
     employee_count = db.Column(db.Integer, nullable=True, default=0)
@@ -179,14 +218,41 @@ class Company(db.Model):
     def no_of_employees(self):
         return self.no_of_hirings or self.employee_count or 0
 
-    def to_dict(self):
+    def get_real_placed_count(self):
+        """Authoritative calculation of placed students directly from Student placement records"""
+        try:
+            return db.session.query(db.func.count(Student.id)).filter(
+                Student.placed_company_id == self.id,
+                (Student.placement_status == 'PLACED') | (Student.placement_status == 'Placed') | (Student.placement_status == 'YES')
+            ).scalar() or 0
+        except Exception:
+            return 0
+
+    def get_registered_students_count(self):
+        """Count of students registered for this company drive"""
+        try:
+            return db.session.query(db.func.count(CompanyRegistration.id)).filter(
+                CompanyRegistration.company_id == self.id,
+                CompanyRegistration.registration_status == 'REGISTERED'
+            ).scalar() or 0
+        except Exception:
+            return 0
+
+    def to_dict(self, placed_count=None, registered_count=None):
         maps_link = self.google_maps_link or self.company_address or ''
         hirings = self.no_of_hirings if self.no_of_hirings is not None else (self.employee_count or 0)
+        actual_placed = placed_count if placed_count is not None else self.get_real_placed_count()
+        actual_reg = registered_count if registered_count is not None else self.get_registered_students_count()
         
         return {
             'id': self.id,
             'name': self.name,
             'company_name': self.name,
+            'job_title': self.job_title or self.industry or '',
+            'job_role': self.job_title or self.industry or '',
+            'job_status': self.job_status or '',
+            'jd_summary': self.jd_summary or '',
+            'jd_pdf_link': self.jd_pdf_link or '',
             'location': self.location or 'N/A',
             'website': self.website or '',
             'contact_person_number': self.contact_person_number or self.contact_phone or '',
@@ -198,9 +264,15 @@ class Company(db.Model):
             'no_of_employees': hirings,
             'ctc_lpa': round(self.ctc_lpa, 2) if self.ctc_lpa is not None else None,
             'package_offered': f"{self.ctc_lpa} LPA" if self.ctc_lpa is not None else (self.package_offered or 'N/A'),
-            'placed_students': self.placed_students if self.placed_students is not None else 0,
+            'placed_students': actual_placed,
+            'registered_students_count': actual_reg,
+            'registration_token': self.registration_token,
+            'registration_link_status': self.registration_link_status or ('ACTIVE' if self.approval_status == 'APPROVED' else 'INACTIVE'),
             'google_maps_link': maps_link,
             'company_address': maps_link,
+            'jd_file_path': self.jd_file_path,
+            'jd_file_name': self.jd_file_name,
+            'has_jd': bool(self.jd_file_path or self.jd_pdf_link),
             'status': self.status,
             'approval_status': self.approval_status or 'PENDING',
             'industry': self.industry or 'Technology',
@@ -211,6 +283,47 @@ class Company(db.Model):
             'created_by_user': self.created_by_user or 'Faculty User',
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
+
+class CompanyRegistration(db.Model):
+    __tablename__ = 'company_registrations'
+
+    id = db.Column(db.Integer, primary_key=True)
+    company_id = db.Column(db.Integer, db.ForeignKey('companies.id', ondelete='CASCADE'), nullable=False)
+    student_id = db.Column(db.Integer, db.ForeignKey('students.id', ondelete='CASCADE'), nullable=False)
+    registration_status = db.Column(db.String(30), nullable=False, default='REGISTERED') # 'REGISTERED', 'WITHDRAWN'
+    resume_link = db.Column(db.Text, nullable=True)
+    registered_email = db.Column(db.String(120), nullable=True)
+    registered_mobile = db.Column(db.String(30), nullable=True)
+    registered_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        db.UniqueConstraint('company_id', 'student_id', name='uq_company_student'),
+    )
+
+    company = db.relationship('Company', backref=db.backref('registrations', cascade='all, delete-orphan'))
+    student = db.relationship('Student', backref=db.backref('company_registrations', cascade='all, delete-orphan'))
+
+    def to_dict(self):
+        s = self.student
+        return {
+            'id': self.id,
+            'company_id': self.company_id,
+            'student_id': self.student_id,
+            'registration_status': self.registration_status,
+            'resume_link': self.resume_link or (s.resume_link if s else ''),
+            'registered_email': self.registered_email or (s.email if s else ''),
+            'registered_mobile': self.registered_mobile or (s.phone if s else ''),
+            'registered_at': self.registered_at.strftime('%Y-%m-%d %H:%M:%S') if self.registered_at else '',
+            'student_reg_no': s.reg_no if s else '',
+            'student_name': s.name if s else '',
+            'student_department': s.department or s.dept if s else '',
+            'student_gender': s.gender if s else '',
+            'student_type': s.hosteller_status or s.hosteller_day_scholar if s else '',
+            'placement_status': s.get_norm_placement_status() if s else 'YET_TO_BE_PLACED',
+            'placed_company_id': s.placed_company_id if s else None,
+            'placed_company_name': s.placed_company if s else None,
+            'placed_ctc_lpa': s.placed_ctc_lpa if s else None
         }
 
 class Faculty(db.Model):

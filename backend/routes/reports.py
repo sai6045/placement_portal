@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 from app.extensions import db
 from app.models import Student, Company, Faculty
 
@@ -6,61 +6,122 @@ reports_bp = Blueprint('reports', __name__)
 
 @reports_bp.route('/summary', methods=['GET'])
 def get_summary():
-    total_students = Student.query.count()
-    placed_students = Student.query.filter(Student.placement_status == 'Placed').count()
-    unplaced_students = Student.query.filter(Student.placement_status == 'Unplaced').count()
-    higher_studies = Student.query.filter(Student.placement_status == 'Higher Studies').count()
-    entrepreneur = Student.query.filter(Student.placement_status == 'Entrepreneur').count()
-    
-    placement_percentage = round((placed_students / total_students * 100), 1) if total_students > 0 else 0.0
-    
-    total_companies = Company.query.count()
-    cold_companies = Company.query.filter_by(status='Cold').count()
-    warm_companies = Company.query.filter_by(status='Warm').count()
-    hot_companies = Company.query.filter_by(status='Hot').count()
-    drives_completed = Company.query.filter_by(status='Drive Completed').count()
-    
-    dept_stats = []
-    departments = db.session.query(Student.department).distinct().all()
-    for d in departments:
-        dept_name = d[0]
-        dept_total = Student.query.filter_by(department=dept_name).count()
-        dept_placed = Student.query.filter_by(department=dept_name, placement_status='Placed').count()
-        dept_pct = round((dept_placed / dept_total * 100), 1) if dept_total > 0 else 0.0
-        dept_stats.append({
-            'department': dept_name,
-            'total': dept_total,
-            'placed': dept_placed,
-            'unplaced': dept_total - dept_placed,
-            'placement_percentage': dept_pct
-        })
-        
-    male_count = Student.query.filter_by(gender='Male').count()
-    female_count = Student.query.filter_by(gender='Female').count()
-    
-    hosteller_count = Student.query.filter_by(hosteller_status='Hosteller').count()
-    day_scholar_count = Student.query.filter_by(hosteller_status='Day Scholar').count()
+    try:
+        # Load all students and companies in just 2 queries instead of 35+ sequential queries
+        all_students = Student.query.order_by(Student.s_no.asc(), Student.id.asc()).all()
+        all_comps = Company.query.all()
 
-    return jsonify({
-        'overview': {
-            'total_students': total_students,
-            'placed_students': placed_students,
-            'unplaced_students': unplaced_students,
-            'higher_studies': higher_studies,
-            'entrepreneur': entrepreneur,
-            'placement_percentage': placement_percentage,
-            'total_companies': total_companies,
-            'drives_completed': drives_completed
-        },
-        'company_status_counts': {
-            'Cold': cold_companies,
-            'Warm': warm_companies,
-            'Hot': hot_companies,
-            'Drive Completed': drives_completed
-        },
-        'department_statistics': dept_stats,
-        'demographics': {
-            'gender': {'Male': male_count, 'Female': female_count},
-            'residence': {'Hosteller': hosteller_count, 'Day Scholar': day_scholar_count}
-        }
-    }), 200
+        total_students = len(all_students)
+        placed_records = [s for s in all_students if s.get_norm_placement_status() == 'PLACED']
+        placed_students = len(placed_records)
+        unplaced_students = total_students - placed_students
+
+        placement_percentage = round((placed_students / total_students * 100), 1) if total_students > 0 else 0.0
+
+        # CTC list from placed records
+        ctc_list = []
+        for s in placed_records:
+            if s.placed_ctc_lpa is not None and s.placed_ctc_lpa > 0:
+                ctc_list.append(s.placed_ctc_lpa)
+            elif s.salary_package and 'LPA' in s.salary_package.upper():
+                try:
+                    val = float(s.salary_package.upper().replace('LPA', '').replace('L', '').strip())
+                    if val > 0:
+                        ctc_list.append(val)
+                except Exception:
+                    pass
+
+        avg_ctc = round(sum(ctc_list) / len(ctc_list), 2) if ctc_list else 0.0
+        highest_ctc = round(max(ctc_list), 2) if ctc_list else 0.0
+
+        # Company counts
+        total_companies = len(all_comps)
+        status_counts = {'Cold': 0, 'Warm': 0, 'Hot': 0, 'Drive Completed': 0}
+        total_hiring_capacity = 0
+        for c in all_comps:
+            st = c.status or 'Cold'
+            status_counts[st] = status_counts.get(st, 0) + 1
+            total_hiring_capacity += (c.no_of_hirings or c.employee_count or 0)
+
+        # Department statistics
+        dept_dict = {}
+        male_count = 0
+        female_count = 0
+        hosteller_count = 0
+        day_scholar_count = 0
+
+        for s in all_students:
+            # Demographics
+            if s.gender == 'Male':
+                male_count += 1
+            elif s.gender == 'Female':
+                female_count += 1
+
+            h_status = (s.hosteller_status or s.hosteller_day_scholar or '').strip()
+            if h_status == 'Hosteller':
+                hosteller_count += 1
+            elif h_status == 'Day Scholar':
+                day_scholar_count += 1
+
+            # Dept aggregation
+            d = (s.department or s.dept or '').strip()
+            if not d:
+                continue
+            if d not in dept_dict:
+                dept_dict[d] = {'total': 0, 'placed': 0, 'ctcs': []}
+            dept_dict[d]['total'] += 1
+            if s.get_norm_placement_status() == 'PLACED':
+                dept_dict[d]['placed'] += 1
+                if s.placed_ctc_lpa is not None and s.placed_ctc_lpa > 0:
+                    dept_dict[d]['ctcs'].append(s.placed_ctc_lpa)
+
+        dept_stats = []
+        for dept_name, val in sorted(dept_dict.items()):
+            d_total = val['total']
+            d_placed = val['placed']
+            d_pct = round((d_placed / d_total * 100), 1) if d_total > 0 else 0.0
+            d_ctcs = val['ctcs']
+            d_avg = round(sum(d_ctcs) / len(d_ctcs), 2) if d_ctcs else 0.0
+            d_max = round(max(d_ctcs), 2) if d_ctcs else 0.0
+
+            dept_stats.append({
+                'department': dept_name,
+                'total': d_total,
+                'placed': d_placed,
+                'unplaced': d_total - d_placed,
+                'placement_percentage': d_pct,
+                'avg_ctc': d_avg,
+                'highest_ctc': d_max
+            })
+
+        student_records = [s.to_full_dict() for s in all_students]
+
+        return jsonify({
+            'overview': {
+                'total_students': total_students,
+                'placed_students': placed_students,
+                'unplaced_students': unplaced_students,
+                'placement_percentage': placement_percentage,
+                'total_companies': total_companies,
+                'drives_completed': status_counts.get('Drive Completed', 0),
+                'total_hiring_capacity': total_hiring_capacity,
+                'total_actual_placements': placed_students,
+                'average_ctc': avg_ctc,
+                'highest_ctc': highest_ctc
+            },
+            'company_status_counts': {
+                'Cold': status_counts.get('Cold', 0),
+                'Warm': status_counts.get('Warm', 0),
+                'Hot': status_counts.get('Hot', 0),
+                'Drive Completed': status_counts.get('Drive Completed', 0)
+            },
+            'department_statistics': dept_stats,
+            'demographics': {
+                'gender': {'Male': male_count, 'Female': female_count},
+                'residence': {'Hosteller': hosteller_count, 'Day Scholar': day_scholar_count}
+            },
+            'students': student_records
+        }), 200
+
+    except Exception as e:
+        return jsonify({'error': 'Failed to calculate live report statistics', 'details': str(e)}), 500

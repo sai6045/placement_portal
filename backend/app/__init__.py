@@ -8,6 +8,7 @@ from routes.students import students_bp
 from routes.companies import companies_bp
 from routes.faculties import faculties_bp
 from routes.reports import reports_bp
+from routes.public import public_bp
 
 # Load environment variables from .env file
 load_dotenv()
@@ -34,6 +35,7 @@ def create_app(config_class=Config):
     app.register_blueprint(companies_bp, url_prefix='/api/companies')
     app.register_blueprint(faculties_bp, url_prefix='/api/faculties')
     app.register_blueprint(reports_bp, url_prefix='/api/reports')
+    app.register_blueprint(public_bp, url_prefix='/api/public')
 
     @app.route('/api/health', methods=['GET'])
     def health_check():
