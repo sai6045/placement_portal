@@ -37,6 +37,13 @@ def create_app(config_class=Config):
     app.register_blueprint(reports_bp, url_prefix='/api/reports')
     app.register_blueprint(public_bp, url_prefix='/api/public')
 
+    @app.route('/', methods=['GET'])
+    def root_health():
+        return jsonify({
+            "status": "ok",
+            "message": "Placement Portal API is running"
+        }), 200
+
     @app.route('/api/health', methods=['GET'])
     def health_check():
         return jsonify({
