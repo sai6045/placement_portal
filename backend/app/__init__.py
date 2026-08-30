@@ -1,5 +1,5 @@
 import os
-from flask import Flask, jsonify
+from flask import Flask, jsonify, send_from_directory
 from dotenv import load_dotenv
 from config import Config
 from app.extensions import db, jwt, bcrypt, cors
@@ -14,7 +14,11 @@ from routes.public import public_bp
 load_dotenv()
 
 def create_app(config_class=Config):
-    app = Flask(__name__)
+    # Determine absolute path to frontend/dist
+    BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    FRONTEND_DIST = os.path.abspath(os.path.join(BACKEND_DIR, "..", "frontend", "dist"))
+
+    app = Flask(__name__, static_folder=None)
     app.config.from_object(config_class)
 
     # Initialize extensions
@@ -22,14 +26,14 @@ def create_app(config_class=Config):
     jwt.init_app(app)
     bcrypt.init_app(app)
 
-    # CORS: allow origins for both dev (localhost:3000, 5173) and production (Vercel)
+    # CORS: allow origins for both dev (localhost:3000, 5173) and production
     cors.init_app(app, resources={r"/api/*": {
         "origins": ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173", "*"],
         "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept"]
     }})
 
-    # Register Blueprints
+    # Register API Blueprints
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(students_bp, url_prefix='/api/students')
     app.register_blueprint(companies_bp, url_prefix='/api/companies')
@@ -37,19 +41,34 @@ def create_app(config_class=Config):
     app.register_blueprint(reports_bp, url_prefix='/api/reports')
     app.register_blueprint(public_bp, url_prefix='/api/public')
 
-    @app.route('/', methods=['GET'])
-    def root_health():
-        return jsonify({
-            "status": "ok",
-            "message": "Placement Portal API is running"
-        }), 200
-
     @app.route('/api/health', methods=['GET'])
     def health_check():
         return jsonify({
             'status': 'healthy',
             'app': 'Placement Portal API',
             'database': app.config['SQLALCHEMY_DATABASE_URI'].split('://')[0]
+        }), 200
+
+    # Serve React SPA and static assets from frontend/dist
+    @app.route('/', defaults={'path': ''})
+    @app.route('/<path:path>')
+    def serve_frontend(path):
+        # Never intercept API routes with SPA fallback
+        if path.startswith('api') or path.startswith('api/'):
+            return jsonify({'error': 'API endpoint not found'}), 404
+
+        # Serve static file if it exists in frontend/dist (e.g. assets/*, logo.jpg, favicon.ico)
+        if path and os.path.exists(os.path.join(FRONTEND_DIST, path)):
+            return send_from_directory(FRONTEND_DIST, path)
+
+        # Fallback to index.html for React SPA client-side routing
+        if os.path.exists(os.path.join(FRONTEND_DIST, 'index.html')):
+            return send_from_directory(FRONTEND_DIST, 'index.html')
+
+        # Fallback if frontend has not been built yet
+        return jsonify({
+            "status": "ok",
+            "message": "Placement Portal API is running"
         }), 200
 
     # Auto-create tables and seed initial accounts
