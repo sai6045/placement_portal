@@ -8,12 +8,22 @@ import { FacultyMembersTab } from './components/FacultyMembersTab';
 import { CompanyDetailsTab } from './components/CompanyDetailsTab';
 import { ReportsTab } from './components/ReportsTab';
 import { PublicRegistrationPage } from './components/PublicRegistrationPage';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 export function App() {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem('placement_portal_token'));
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    const savedUser = localStorage.getItem('placement_portal_user');
-    return savedUser ? JSON.parse(savedUser) : null;
+    try {
+      const savedUser = localStorage.getItem('placement_portal_user');
+      if (!savedUser) return null;
+      const parsed = JSON.parse(savedUser);
+      if (parsed && typeof parsed === 'object' && parsed.email && parsed.role) {
+        return parsed;
+      }
+      return null;
+    } catch {
+      return null;
+    }
   });
 
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
@@ -63,45 +73,51 @@ export function App() {
 
   // Protected Route Check: Unauthenticated users are shown the LoginPage
   if (!token || !currentUser) {
-    return <LoginPage onLoginSuccess={handleLoginSuccess} />;
+    return (
+      <ErrorBoundary>
+        <LoginPage onLoginSuccess={handleLoginSuccess} />
+      </ErrorBoundary>
+    );
   }
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] flex flex-col font-sans text-[#1E293B]">
-      {/* Header & Tab Navigation */}
-      <Navigation
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        currentUser={currentUser}
-        onLogout={handleLogout}
-      />
+    <ErrorBoundary>
+      <div className="min-h-screen bg-[#F8FAFC] flex flex-col font-sans text-[#1E293B]">
+        {/* Header & Tab Navigation */}
+        <Navigation
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          currentUser={currentUser}
+          onLogout={handleLogout}
+        />
 
-      {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {activeTab === 'dashboard' && <DashboardTab setActiveTab={setActiveTab} />}
-        {activeTab === 'students' && <StudentDetailsTab currentUser={currentUser} />}
-        {activeTab === 'faculties' && (
-          <FacultyMembersTab
-            currentUser={currentUser}
-            onCompanyAdded={handleCompanyAdded}
-          />
-        )}
-        {activeTab === 'companies' && (
-          <CompanyDetailsTab
-            currentUser={currentUser}
-            refreshTrigger={companyRefreshTrigger}
-          />
-        )}
-        {activeTab === 'reports' && <ReportsTab currentUser={currentUser} />}
-      </main>
+        {/* Main Content Area */}
+        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          {activeTab === 'dashboard' && <DashboardTab setActiveTab={setActiveTab} />}
+          {activeTab === 'students' && <StudentDetailsTab currentUser={currentUser} />}
+          {activeTab === 'faculties' && (
+            <FacultyMembersTab
+              currentUser={currentUser}
+              onCompanyAdded={handleCompanyAdded}
+            />
+          )}
+          {activeTab === 'companies' && (
+            <CompanyDetailsTab
+              currentUser={currentUser}
+              refreshTrigger={companyRefreshTrigger}
+            />
+          )}
+          {activeTab === 'reports' && <ReportsTab currentUser={currentUser} />}
+        </main>
 
-      {/* Footer */}
-      <footer className="bg-white border-t border-[#E2E8F0] py-4 mt-auto">
-        <div className="max-w-7xl mx-auto px-4 text-center text-xs text-[#64748B]">
-          Placement Portal System &bull; Active Account: <span className="font-semibold text-[#1E293B]">{currentUser.name}</span> ({currentUser.email}) &bull; Role: <span className="font-bold text-[#3B82F6]">{currentUser.role}</span>
-        </div>
-      </footer>
-    </div>
+        {/* Footer */}
+        <footer className="bg-white border-t border-[#E2E8F0] py-4 mt-auto">
+          <div className="max-w-7xl mx-auto px-4 text-center text-xs text-[#64748B]">
+            Placement Portal System &bull; Active Account: <span className="font-semibold text-[#1E293B]">{currentUser.name}</span> ({currentUser.email}) &bull; Role: <span className="font-bold text-[#3B82F6]">{currentUser.role}</span>
+          </div>
+        </footer>
+      </div>
+    </ErrorBoundary>
   );
 }
 

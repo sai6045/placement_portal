@@ -22,11 +22,11 @@ def create_app(config_class=Config):
     jwt.init_app(app)
     bcrypt.init_app(app)
 
-    # CORS: allow all origins for both dev and production
+    # CORS: allow origins for both dev (localhost:3000, 5173) and production (Vercel)
     cors.init_app(app, resources={r"/api/*": {
-        "origins": ["http://localhost:3000", "http://127.0.0.1:3000", "*"],
-        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        "allow_headers": ["Content-Type", "Authorization"]
+        "origins": ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "http://127.0.0.1:5173", "*"],
+        "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept"]
     }})
 
     # Register Blueprints

@@ -1,7 +1,13 @@
 import axios from 'axios';
 import { StudentSummary, StudentFull, Company, Faculty, ReportSummary, User, CompanyRegistration } from '../types';
 
-const API_BASE = '/api';
+// Resolve Base API URL:
+// In production (Vercel): uses VITE_API_URL env variable (e.g. https://your-backend.onrender.com)
+// In local development: defaults to '' so Vite's dev proxy /api -> http://localhost:5000 handles it seamlessly,
+// or uses VITE_API_URL if explicitly specified in .env / .env.local.
+const RAW_API_URL = (import.meta.env.VITE_API_URL || '').trim();
+export const API_HOST = RAW_API_URL.replace(/\/+$/, '');
+export const API_BASE = API_HOST ? `${API_HOST}/api` : '/api';
 
 // Attach JWT token from localStorage if present
 axios.interceptors.request.use((config) => {
@@ -12,10 +18,29 @@ axios.interceptors.request.use((config) => {
   return config;
 });
 
+// Global response interceptor for helpful error reporting and token expiry handling
+axios.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (import.meta.env.DEV) {
+      console.warn('[Placement Portal API Error]', error.config?.url, error.response?.status, error.message);
+    }
+    // If 401 Unauthorized occurs on a protected route, clean stale token
+    if (error.response && error.response.status === 401 && !error.config?.url?.includes('/auth/login')) {
+      localStorage.removeItem('placement_portal_token');
+      localStorage.removeItem('placement_portal_user');
+    }
+    return Promise.reject(error);
+  }
+);
+
 export const api = {
   // Auth APIs
   login: async (email: string, password: string): Promise<{ token: string; user: User }> => {
     const res = await axios.post(`${API_BASE}/auth/login`, { email, password });
+    if (!res.data || !res.data.token || !res.data.user) {
+      throw new Error('Invalid authentication response from server.');
+    }
     return res.data;
   },
 

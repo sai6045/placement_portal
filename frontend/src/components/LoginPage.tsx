@@ -25,9 +25,16 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
 
     try {
       const data = await api.login(email.trim().toLowerCase(), password);
+      if (!data || !data.token || !data.user) {
+        throw new Error('Invalid response received from server.');
+      }
       onLoginSuccess(data.token, data.user);
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Invalid email or password.');
+      if (err.message === 'Network Error' || err.code === 'ERR_NETWORK' || !err.response) {
+        setError('Unable to connect to the Placement Portal server. Please check your internet connection or backend server status.');
+      } else {
+        setError(err.response?.data?.error || err.message || 'Invalid email or password.');
+      }
     } finally {
       setLoading(false);
     }
