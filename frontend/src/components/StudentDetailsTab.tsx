@@ -1,25 +1,38 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { StudentSummary, StudentFull, Company, User } from '../types';
 import { api } from '../api';
-import { Upload, FileSpreadsheet, Download, Search, Eye, Plus, X, Check, Mail, Phone, GraduationCap, ExternalLink, AlertCircle, Building2, CheckCircle, RotateCcw, ArrowUpDown, ArrowUp, ArrowDown, CheckCircle2, XCircle, Calendar, Trash2 } from 'lucide-react';
+import { Upload, FileSpreadsheet, Download, Search, Eye, Plus, X, Check, Mail, Phone, GraduationCap, ExternalLink, AlertCircle, Building2, CheckCircle, RotateCcw, ArrowUpDown, ArrowUp, ArrowDown, CheckCircle2, XCircle, Calendar, Trash2, Edit3, MoreVertical, Pencil } from 'lucide-react';
 
 interface StudentDetailsTabProps {
   currentUser: User;
+  initialFilter?: { placementStatus?: string; department?: string } | null;
 }
 
 type StudentSortField = 's_no' | 'reg_no' | 'name' | 'department' | 'gender' | 'hosteller_status' | 'placement_status';
 type SortOrder = 'asc' | 'desc' | null;
 
-export const StudentDetailsTab: React.FC<StudentDetailsTabProps> = ({ currentUser }) => {
+export const StudentDetailsTab: React.FC<StudentDetailsTabProps> = ({ currentUser, initialFilter }) => {
   const [students, setStudents] = useState<StudentSummary[]>([]);
   const [loading, setLoading] = useState(true);
   
+  // Active Dropdown Action Menu
+  const [activeMenuStudentId, setActiveMenuStudentId] = useState<number | null>(null);
+
   // Search & Filters
   const [search, setSearch] = useState('');
-  const [selectedDept, setSelectedDept] = useState('');
+  const [selectedDept, setSelectedDept] = useState(initialFilter?.department || '');
   const [selectedGender, setSelectedGender] = useState('');
   const [selectedHosteller, setSelectedHosteller] = useState('');
-  const [selectedPlacementStatus, setSelectedPlacementStatus] = useState('');
+  const [selectedPlacementStatus, setSelectedPlacementStatus] = useState(initialFilter?.placementStatus || '');
+
+  useEffect(() => {
+    if (initialFilter?.placementStatus !== undefined) {
+      setSelectedPlacementStatus(initialFilter.placementStatus);
+    }
+    if (initialFilter?.department !== undefined) {
+      setSelectedDept(initialFilter.department);
+    }
+  }, [initialFilter]);
 
   // Sorting
   const [sortField, setSortField] = useState<StudentSortField | null>(null);
@@ -29,6 +42,14 @@ export const StudentDetailsTab: React.FC<StudentDetailsTabProps> = ({ currentUse
   const [selectedStudentFull, setSelectedStudentFull] = useState<StudentFull | null>(null);
   const [loadingDetails, setLoadingDetails] = useState(false);
   
+  // Edit Student Modal State
+  const [editingStudent, setEditingStudent] = useState<StudentFull | null>(null);
+  const [editForm, setEditForm] = useState<Partial<StudentFull>>({});
+  const [loadingEditDetails, setLoadingEditDetails] = useState(false);
+  const [isEditingSaving, setIsEditingSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editSuccess, setEditSuccess] = useState<string | null>(null);
+
   // Place Student Modal State
   const [placeModalStudent, setPlaceModalStudent] = useState<StudentSummary | null>(null);
   const [eligibleCompanies, setEligibleCompanies] = useState<Company[]>([]);
@@ -67,7 +88,7 @@ export const StudentDetailsTab: React.FC<StudentDetailsTabProps> = ({ currentUse
   const initialStudentForm: Partial<StudentFull> = {
     reg_no: '',
     name: '',
-    department: 'CSE',
+    department: '',
     gender: 'Male',
     hosteller_status: 'Day Scholar',
     sslc_percentage: 85.0,
@@ -106,6 +127,30 @@ export const StudentDetailsTab: React.FC<StudentDetailsTabProps> = ({ currentUse
     fetchStudents();
   }, []);
 
+  // Dynamically extract unique departments from actual loaded student records
+  const availableDepartments = useMemo(() => {
+    const deptMap = new Map<string, string>();
+    students.forEach(s => {
+      const d = (s.department || s.dept || '').trim();
+      if (d) {
+        const key = d.toLowerCase();
+        if (!deptMap.has(key)) {
+          deptMap.set(key, d);
+        }
+      }
+    });
+    return Array.from(deptMap.values()).sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: 'base' })
+    );
+  }, [students]);
+
+  // Cleanly reset selectedDept if that department no longer exists in student records
+  useEffect(() => {
+    if (selectedDept && !availableDepartments.some(d => d.toUpperCase() === selectedDept.toUpperCase())) {
+      setSelectedDept('');
+    }
+  }, [availableDepartments, selectedDept]);
+
   // Filtered and Sorted list
   const processedStudents = useMemo(() => {
     let result = [...students];
@@ -123,7 +168,7 @@ export const StudentDetailsTab: React.FC<StudentDetailsTabProps> = ({ currentUse
 
     // 2. Department
     if (selectedDept) {
-      result = result.filter(s => (s.department || s.dept || '').toUpperCase() === selectedDept.toUpperCase());
+      result = result.filter(s => (s.department || s.dept || '').trim().toUpperCase() === selectedDept.trim().toUpperCase());
     }
 
     // 3. Gender
@@ -200,12 +245,78 @@ export const StudentDetailsTab: React.FC<StudentDetailsTabProps> = ({ currentUse
     );
   };
 
+  // Close actions dropdown when clicking anywhere outside
+  useEffect(() => {
+    const handleClickOutside = () => {
+      setActiveMenuStudentId(null);
+    };
+    if (activeMenuStudentId !== null) {
+      window.addEventListener('click', handleClickOutside);
+      return () => window.removeEventListener('click', handleClickOutside);
+    }
+  }, [activeMenuStudentId]);
+
   const handleOpenMore = (studentId: number) => {
     setLoadingDetails(true);
     api.getStudentDetails(studentId)
       .then(res => setSelectedStudentFull(res))
       .catch(err => alert('Failed to fetch full student details: ' + (err.response?.data?.error || err.message)))
       .finally(() => setLoadingDetails(false));
+  };
+
+  const handleOpenEditStudent = async (student: StudentSummary) => {
+    setEditError(null);
+    setEditSuccess(null);
+    setLoadingEditDetails(true);
+    // Prepopulate with available row data immediately
+    setEditForm({
+      reg_no: student.reg_no,
+      name: student.name,
+      department: student.department || student.dept || '',
+      gender: student.gender || 'Male',
+      hosteller_status: student.hosteller_status || student.hosteller_day_scholar || 'Day Scholar',
+      placement_status: student.placement_status || 'YET_TO_BE_PLACED',
+      placed_company: student.placed_company || '',
+    });
+    setEditingStudent(student as StudentFull);
+
+    try {
+      const full = await api.getStudentDetails(student.id);
+      setEditingStudent(full);
+      setEditForm({
+        ...full,
+        department: full.department || full.dept || '',
+        gender: full.gender || 'Male',
+        hosteller_status: full.hosteller_status || full.hosteller_day_scholar || 'Day Scholar',
+      });
+    } catch (err: any) {
+      console.error('Failed to load full student details for editing:', err);
+    } finally {
+      setLoadingEditDetails(false);
+    }
+  };
+
+  const handleEditStudentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingStudent) return;
+    setIsEditingSaving(true);
+    setEditError(null);
+    setEditSuccess(null);
+
+    try {
+      await api.updateStudent(editingStudent.id, editForm);
+      setEditSuccess('Student details updated successfully!');
+      fetchStudents();
+      setTimeout(() => {
+        setEditingStudent(null);
+        setEditSuccess(null);
+      }, 1200);
+    } catch (err: any) {
+      const msg = err.response?.data?.error || err.response?.data?.details || 'Failed to update student details.';
+      setEditError(msg);
+    } finally {
+      setIsEditingSaving(false);
+    }
   };
 
   const handleOpenPlaceModal = async (student: StudentSummary) => {
@@ -521,7 +632,7 @@ export const StudentDetailsTab: React.FC<StudentDetailsTabProps> = ({ currentUse
             />
           </div>
 
-          {/* Department filter */}
+          {/* Department filter — Dynamically generated from actual database records */}
           <div>
             <select
               value={selectedDept}
@@ -529,12 +640,11 @@ export const StudentDetailsTab: React.FC<StudentDetailsTabProps> = ({ currentUse
               className="w-full py-2 px-3 bg-white border border-[#E2E8F0] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#3B82F6]"
             >
               <option value="">All Departments</option>
-              <option value="CSE">CSE</option>
-              <option value="IT">IT</option>
-              <option value="ECE">ECE</option>
-              <option value="EEE">EEE</option>
-              <option value="MECH">MECH</option>
-              <option value="CIVIL">CIVIL</option>
+              {availableDepartments.map(dept => (
+                <option key={dept} value={dept}>
+                  {dept}
+                </option>
+              ))}
             </select>
           </div>
 
@@ -651,7 +761,7 @@ export const StudentDetailsTab: React.FC<StudentDetailsTabProps> = ({ currentUse
                   >
                     Placement Status {renderSortIcon('placement_status')}
                   </th>
-                  <th className="py-3 px-4 text-center w-36">Actions</th>
+                  <th className="py-3 px-4 text-center w-24">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E2E8F0] text-[#1E293B]">
@@ -707,40 +817,100 @@ export const StudentDetailsTab: React.FC<StudentDetailsTabProps> = ({ currentUse
                           </span>
                         )}
                       </td>
-                      <td className="py-3 px-4 text-center">
-                        <div className="flex items-center justify-center gap-1.5">
-                          {/* [ More ] Button */}
+                      <td className="py-3 px-4 text-center relative" onClick={e => e.stopPropagation()}>
+                        <div className="relative inline-block text-left">
                           <button
-                            onClick={() => handleOpenMore(student.id)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-[#3B82F6] bg-[#EFF6FF] hover:bg-blue-100 border border-blue-200 rounded-md transition"
-                            title="View Complete 18-Field Profile"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveMenuStudentId(prev => prev === student.id ? null : student.id);
+                            }}
+                            className={`p-1.5 rounded-lg border transition shadow-xs inline-flex items-center justify-center ${
+                              activeMenuStudentId === student.id
+                                ? 'bg-[#3B82F6] text-white border-[#3B82F6]'
+                                : 'bg-white text-[#64748B] hover:text-[#3B82F6] hover:bg-[#EFF6FF] border-[#E2E8F0] hover:border-[#3B82F6]'
+                            }`}
+                            title="Actions Menu (Edit, Place, Delete)"
                           >
-                            <Eye className="h-3 w-3" /> More
+                            <Edit3 className="h-4 w-4" />
                           </button>
 
-                          {/* [ Place Student ] */}
-                          {!isPlaced && (
-                            <button
-                              onClick={() => handleOpenPlaceModal(student)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-md transition"
-                              title="Place student into an Approved Drive Completed company"
+                          {/* Dropdown Menu */}
+                          {activeMenuStudentId === student.id && (
+                            <div 
+                              className="absolute right-0 mt-1.5 w-48 bg-white rounded-xl shadow-xl border border-[#E2E8F0] py-1 z-50 text-left animate-in fade-in zoom-in-95 duration-100 divide-y divide-[#F1F5F9]"
+                              onClick={e => e.stopPropagation()}
                             >
-                              <Building2 className="h-3 w-3 text-emerald-600" /> Place
-                            </button>
-                          )}
+                              <div className="py-1">
+                                {/* 1. Edit Student Details */}
+                                <button
+                                  onClick={() => {
+                                    setActiveMenuStudentId(null);
+                                    handleOpenEditStudent(student);
+                                  }}
+                                  className="w-full px-3.5 py-2 text-xs font-semibold text-[#1E293B] hover:text-[#3B82F6] hover:bg-[#EFF6FF] flex items-center gap-2.5 transition text-left"
+                                >
+                                  <Pencil className="h-3.5 w-3.5 text-[#3B82F6] shrink-0" />
+                                  <span>Edit Student Details</span>
+                                </button>
 
-                          {/* [ Delete Student ] - Admin Only */}
-                          {currentUser.role === 'ADMIN' && (
-                            <button
-                              onClick={() => {
-                                setDeletingStudent(student);
-                                setDeleteError(null);
-                              }}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-md transition"
-                              title="Delete Student Record"
-                            >
-                              <Trash2 className="h-3 w-3 text-rose-600" /> Delete
-                            </button>
+                                {/* 2. Place Student */}
+                                {isPlaced ? (
+                                  <button
+                                    disabled
+                                    className="w-full px-3.5 py-2 text-xs font-semibold text-slate-400 flex items-center justify-between cursor-not-allowed bg-slate-50/60 text-left"
+                                    title={`Already Placed at ${student.placed_company || 'company'}`}
+                                  >
+                                    <span className="flex items-center gap-2.5">
+                                      <Building2 className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                                      <span>Place Student</span>
+                                    </span>
+                                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                                      Placed
+                                    </span>
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => {
+                                      setActiveMenuStudentId(null);
+                                      handleOpenPlaceModal(student);
+                                    }}
+                                    className="w-full px-3.5 py-2 text-xs font-semibold text-[#1E293B] hover:text-emerald-700 hover:bg-emerald-50 flex items-center gap-2.5 transition text-left"
+                                  >
+                                    <Building2 className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                                    <span>Place Student</span>
+                                  </button>
+                                )}
+
+                                {/* View Full Profile */}
+                                <button
+                                  onClick={() => {
+                                    setActiveMenuStudentId(null);
+                                    handleOpenMore(student.id);
+                                  }}
+                                  className="w-full px-3.5 py-2 text-xs font-semibold text-[#1E293B] hover:text-[#3B82F6] hover:bg-[#EFF6FF] flex items-center gap-2.5 transition text-left"
+                                >
+                                  <Eye className="h-3.5 w-3.5 text-[#64748B] shrink-0" />
+                                  <span>View Full Profile</span>
+                                </button>
+                              </div>
+
+                              {/* 3. Delete Student - Marked as destructive */}
+                              {currentUser.role === 'ADMIN' && (
+                                <div className="py-1">
+                                  <button
+                                    onClick={() => {
+                                      setActiveMenuStudentId(null);
+                                      setDeletingStudent(student);
+                                      setDeleteError(null);
+                                    }}
+                                    className="w-full px-3.5 py-2 text-xs font-semibold text-rose-600 hover:text-rose-700 hover:bg-rose-50 flex items-center gap-2.5 transition text-left"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5 text-rose-600 shrink-0" />
+                                    <span>Delete Student</span>
+                                  </button>
+                                </div>
+                              )}
+                            </div>
                           )}
                         </div>
                       </td>
@@ -752,6 +922,320 @@ export const StudentDetailsTab: React.FC<StudentDetailsTabProps> = ({ currentUse
           </div>
         )}
       </div>
+
+      {/* EDIT STUDENT MODAL */}
+      {editingStudent && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-lg max-w-2xl w-full p-6 border border-[#E2E8F0] max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0]">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-blue-50 text-[#3B82F6] rounded-lg">
+                  <Edit3 className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-[#1E293B] text-base">Edit Student Details</h3>
+                  <p className="text-xs text-[#64748B]">Update student profile &bull; Reg No: <span className="font-mono text-[#3B82F6] font-bold">{editingStudent.reg_no}</span></p>
+                </div>
+              </div>
+              <button 
+                onClick={() => { setEditingStudent(null); setEditError(null); }} 
+                className="p-1 text-[#64748B] hover:text-[#1E293B]"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {editError && (
+              <div className="mt-3 p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg text-xs font-medium flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 text-rose-600 shrink-0" />
+                <span>{editError}</span>
+              </div>
+            )}
+
+            {editSuccess && (
+              <div className="mt-3 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg text-xs font-semibold flex items-center gap-2">
+                <Check className="h-4 w-4 text-emerald-600 shrink-0" />
+                <span>{editSuccess}</span>
+              </div>
+            )}
+
+            {loadingEditDetails ? (
+              <div className="py-12 text-center text-xs text-[#64748B]">
+                <div className="animate-spin h-5 w-5 border-2 border-[#3B82F6] border-t-transparent rounded-full mx-auto mb-2"></div>
+                Loading complete student record...
+              </div>
+            ) : (
+              <form onSubmit={handleEditStudentSubmit} className="py-4 space-y-4 text-xs">
+                {/* 1. Basic Information */}
+                <div>
+                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-[#64748B] mb-2.5">
+                    Basic Student Information
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-semibold text-[#1E293B]">Register Number *</label>
+                      <input
+                        type="text"
+                        required
+                        value={editForm.reg_no || ''}
+                        onChange={e => setEditForm({ ...editForm, reg_no: e.target.value })}
+                        className="w-full mt-1 p-2 bg-white border border-[#E2E8F0] rounded-lg font-mono text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-[#1E293B]">Full Name *</label>
+                      <input
+                        type="text"
+                        required
+                        value={editForm.name || ''}
+                        onChange={e => setEditForm({ ...editForm, name: e.target.value })}
+                        className="w-full mt-1 p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-[#1E293B]">Department *</label>
+                      <input
+                        list="edit-dept-suggestions"
+                        type="text"
+                        required
+                        placeholder="e.g. CSE, IT, AIML..."
+                        value={editForm.department || editForm.dept || ''}
+                        onChange={e => setEditForm({ ...editForm, department: e.target.value, dept: e.target.value })}
+                        className="w-full mt-1 p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                      />
+                      <datalist id="edit-dept-suggestions">
+                        {availableDepartments.map(dept => (
+                          <option key={dept} value={dept} />
+                        ))}
+                      </datalist>
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-[#1E293B]">Gender *</label>
+                      <select
+                        value={editForm.gender || 'Male'}
+                        onChange={e => setEditForm({ ...editForm, gender: e.target.value })}
+                        className="w-full mt-1 p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                      >
+                        <option value="Male">Male</option>
+                        <option value="Female">Female</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-[#1E293B]">Residence Status *</label>
+                      <select
+                        value={editForm.hosteller_status || editForm.hosteller_day_scholar || 'Day Scholar'}
+                        onChange={e => setEditForm({ ...editForm, hosteller_status: e.target.value, hosteller_day_scholar: e.target.value })}
+                        className="w-full mt-1 p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                      >
+                        <option value="Day Scholar">Day Scholar</option>
+                        <option value="Hosteller">Hosteller</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-[#1E293B]">Graduation Year</label>
+                      <input
+                        type="number"
+                        placeholder="2026"
+                        value={editForm.graduation_year ?? ''}
+                        onChange={e => setEditForm({ ...editForm, graduation_year: e.target.value ? parseInt(e.target.value) : null })}
+                        className="w-full mt-1 p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. Academic Scores */}
+                <div className="pt-2 border-t border-[#E2E8F0]">
+                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-[#64748B] mb-2.5">
+                    Academic Scores &amp; Arrears
+                  </h4>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <div>
+                      <label className="font-semibold text-[#1E293B]">SSLC (10th) %</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        value={editForm.sslc_percentage ?? editForm.tenth_percentage ?? ''}
+                        onChange={e => setEditForm({ ...editForm, sslc_percentage: parseFloat(e.target.value) || 0, tenth_percentage: parseFloat(e.target.value) || 0 })}
+                        className="w-full mt-1 p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-[#1E293B]">HSC (12th) %</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        value={editForm.hsc_percentage ?? editForm.twelfth_percentage ?? ''}
+                        onChange={e => setEditForm({ ...editForm, hsc_percentage: parseFloat(e.target.value) || 0, twelfth_percentage: parseFloat(e.target.value) || 0 })}
+                        className="w-full mt-1 p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-[#1E293B]">UG % / CGPA</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        value={editForm.ug_percentage ?? editForm.cgpa ?? ''}
+                        onChange={e => setEditForm({ ...editForm, ug_percentage: parseFloat(e.target.value) || 0, cgpa: parseFloat(e.target.value) || 0 })}
+                        className="w-full mt-1 p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-[#1E293B]">PG % (Optional)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        placeholder="N/A"
+                        value={editForm.pg_percentage ?? ''}
+                        onChange={e => setEditForm({ ...editForm, pg_percentage: e.target.value ? parseFloat(e.target.value) : null })}
+                        className="w-full mt-1 p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-[#1E293B]">Current Arrears</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={editForm.current_arrears ?? 0}
+                        onChange={e => setEditForm({ ...editForm, current_arrears: parseInt(e.target.value) || 0 })}
+                        className="w-full mt-1 p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-[#1E293B]">History of Arrears</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={editForm.history_arrears ?? 0}
+                        onChange={e => setEditForm({ ...editForm, history_arrears: parseInt(e.target.value) || 0 })}
+                        className="w-full mt-1 p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. Links & Social Profiles */}
+                <div className="pt-2 border-t border-[#E2E8F0]">
+                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-[#64748B] mb-2.5">
+                    Profiles, Links &amp; Resume
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-semibold text-[#1E293B]">GitHub ID / URL</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. github.com/username"
+                        value={editForm.github_id || ''}
+                        onChange={e => setEditForm({ ...editForm, github_id: e.target.value })}
+                        className="w-full mt-1 p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-[#1E293B]">LinkedIn ID / URL</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. linkedin.com/in/username"
+                        value={editForm.linkedin_id || ''}
+                        onChange={e => setEditForm({ ...editForm, linkedin_id: e.target.value })}
+                        className="w-full mt-1 p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-[#1E293B]">Resume Link (URL)</label>
+                      <input
+                        type="url"
+                        placeholder="https://drive.google.com/..."
+                        value={editForm.resume_link || ''}
+                        onChange={e => setEditForm({ ...editForm, resume_link: e.target.value })}
+                        className="w-full mt-1 p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-[#1E293B]">Portfolio Link (URL)</label>
+                      <input
+                        type="url"
+                        placeholder="https://myportfolio.dev"
+                        value={editForm.portfolio_link || ''}
+                        onChange={e => setEditForm({ ...editForm, portfolio_link: e.target.value })}
+                        className="w-full mt-1 p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. Contact Information */}
+                <div className="pt-2 border-t border-[#E2E8F0]">
+                  <h4 className="text-[11px] font-bold uppercase tracking-wider text-[#64748B] mb-2.5">
+                    Contact Information
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-semibold text-[#1E293B]">Email Address</label>
+                      <input
+                        type="email"
+                        placeholder="student@example.com"
+                        value={editForm.email || ''}
+                        onChange={e => setEditForm({ ...editForm, email: e.target.value })}
+                        className="w-full mt-1 p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="font-semibold text-[#1E293B]">Mobile / Phone Number</label>
+                      <input
+                        type="text"
+                        placeholder="9876543210"
+                        value={editForm.phone || editForm.mobile_no || ''}
+                        onChange={e => setEditForm({ ...editForm, phone: e.target.value, mobile_no: e.target.value })}
+                        className="w-full mt-1 p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Submit & Cancel Buttons */}
+                <div className="pt-3 flex justify-end gap-2 border-t border-[#E2E8F0]">
+                  <button
+                    type="button"
+                    onClick={() => { setEditingStudent(null); setEditError(null); }}
+                    className="px-3.5 py-1.5 bg-white text-[#64748B] font-semibold rounded-lg hover:bg-[#F8FAFC] border border-[#E2E8F0]"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isEditingSaving}
+                    className="px-4 py-1.5 bg-[#3B82F6] text-white font-bold rounded-lg hover:bg-[#2563EB] disabled:opacity-50 transition flex items-center gap-1.5"
+                  >
+                    {isEditingSaving ? 'Saving Changes...' : 'Update Student Details'}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* PLACE STUDENT MODAL */}
       {placeModalStudent && (
@@ -1171,18 +1655,20 @@ export const StudentDetailsTab: React.FC<StudentDetailsTabProps> = ({ currentUse
 
                 <div>
                   <label className="font-semibold text-[#1E293B]">Department *</label>
-                  <select
-                    value={newStudent.department}
-                    onChange={e => setNewStudent({...newStudent, department: e.target.value})}
+                  <input
+                    list="add-dept-suggestions"
+                    type="text"
+                    required
+                    placeholder="e.g. CSE, IT, AIML..."
+                    value={newStudent.department || ''}
+                    onChange={e => setNewStudent({ ...newStudent, department: e.target.value })}
                     className="w-full mt-1 p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
-                  >
-                    <option value="CSE">CSE</option>
-                    <option value="IT">IT</option>
-                    <option value="ECE">ECE</option>
-                    <option value="EEE">EEE</option>
-                    <option value="MECH">MECH</option>
-                    <option value="CIVIL">CIVIL</option>
-                  </select>
+                  />
+                  <datalist id="add-dept-suggestions">
+                    {availableDepartments.map(dept => (
+                      <option key={dept} value={dept} />
+                    ))}
+                  </datalist>
                 </div>
 
                 <div>

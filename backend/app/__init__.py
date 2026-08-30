@@ -49,6 +49,45 @@ def create_app(config_class=Config):
             'database': app.config['SQLALCHEMY_DATABASE_URI'].split('://')[0]
         }), 200
 
+    @app.route('/api/test/extract-pdf', methods=['POST'])
+    def test_extract_pdf():
+        """Development endpoint to test PDF text extraction"""
+        from flask import request
+        from services.pdf_extractor import extract_pdf_text
+
+        source = None
+        if 'file' in request.files:
+            source = request.files['file']
+        elif 'pdf' in request.files:
+            source = request.files['pdf']
+        elif request.is_json:
+            data = request.get_json() or {}
+            source = data.get('path') or data.get('url') or data.get('file_path')
+
+        if not source:
+            return jsonify({
+                'success': False,
+                'page_count': 0,
+                'error': 'Please provide a PDF file via multipart form or JSON path/url.'
+            }), 400
+
+        result = extract_pdf_text(source)
+        if not result.get('success'):
+            return jsonify({
+                'success': False,
+                'page_count': result.get('page_count', 0),
+                'error': result.get('error', 'Unable to extract text from this PDF.')
+            }), 400
+
+        preview_len = min(500, len(result['text']))
+        return jsonify({
+            'success': True,
+            'page_count': result.get('page_count', 0),
+            'character_count': result.get('character_count', 0),
+            'word_count': result.get('word_count', 0),
+            'preview': result['text'][:preview_len]
+        }), 200
+
     # Serve React SPA and static assets from frontend/dist
     @app.route('/', defaults={'path': ''})
     @app.route('/<path:path>')

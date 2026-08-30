@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Faculty, Company, CompanyStatus, ApprovalStatus, User, CompanyRegistration } from '../types';
 import { api } from '../api';
-import { Plus, UserCheck, Building2, Mail, Phone, MapPin, Globe, Edit, Trash2, X, Check, AlertCircle, CheckCircle, CheckCircle2, XCircle, Clock, ExternalLink, Upload, FileSpreadsheet, FileText, Download, Link2, Copy, Users, GraduationCap, Search } from 'lucide-react';
+import { Plus, UserCheck, Building2, Mail, Phone, MapPin, Globe, Edit, Edit3, Trash2, X, Check, AlertCircle, CheckCircle, CheckCircle2, XCircle, Clock, ExternalLink, Upload, FileSpreadsheet, FileText, Download, Link2, Copy, Users, GraduationCap, Search } from 'lucide-react';
 
 interface FacultyMembersTabProps {
   currentUser: User;
@@ -29,6 +29,28 @@ export const FacultyMembersTab: React.FC<FacultyMembersTabProps> = ({ currentUse
   const [regStatus, setRegStatus] = useState('');
   const [regPlacementStatus, setRegPlacementStatus] = useState('');
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+
+  // Placed Students Modal State
+  const [placedModalCompany, setPlacedModalCompany] = useState<Company | null>(null);
+  const [placedStudentsList, setPlacedStudentsList] = useState<any[]>([]);
+  const [loadingPlacedStudents, setLoadingPlacedStudents] = useState(false);
+  const [placedStudentsError, setPlacedStudentsError] = useState<string | null>(null);
+
+  const handleOpenPlacedStudentsModal = async (comp: Company) => {
+    setPlacedModalCompany(comp);
+    setPlacedStudentsList([]);
+    setPlacedStudentsError(null);
+    setLoadingPlacedStudents(true);
+    try {
+      const data = await api.getCompanyPlacedStudents(comp.id);
+      setPlacedStudentsList(data.students || []);
+    } catch (err: any) {
+      console.error('Failed to load placed students for company:', err);
+      setPlacedStudentsError(err.response?.data?.error || err.response?.data?.details || 'Failed to load placed candidates.');
+    } finally {
+      setLoadingPlacedStudents(false);
+    }
+  };
 
   // Export Template & Import states
   const [downloadingTemplate, setDownloadingTemplate] = useState(false);
@@ -763,14 +785,37 @@ export const FacultyMembersTab: React.FC<FacultyMembersTabProps> = ({ currentUse
                         </span>
                       </td>
 
-                      {/* Placed Students (Drive Completed only) */}
+                      {/* Placed Students (Compact Icon Button with Popover / Modal) */}
                       <td className="py-3.5 px-4 text-center">
                         {isDriveCompleted ? (
-                          <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 font-extrabold rounded-full border border-emerald-300">
-                            {comp.placed_students ?? 0} Placed
-                          </span>
+                          (comp.placed_students ?? 0) > 0 ? (
+                            <button
+                              onClick={() => handleOpenPlacedStudentsModal(comp)}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 hover:text-emerald-800 border border-emerald-300 rounded-lg text-xs font-extrabold transition shadow-2xs group"
+                              title={`Click to view ${comp.placed_students} placed student(s)`}
+                            >
+                              <GraduationCap className="h-3.5 w-3.5 text-emerald-600 group-hover:scale-110 transition-transform" />
+                              <span className="text-[11px]">{comp.placed_students}</span>
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleOpenPlacedStudentsModal(comp)}
+                              className="inline-flex items-center gap-1 px-2 py-1 bg-[#F8FAFC] hover:bg-slate-100 text-[#64748B] hover:text-[#1E293B] border border-[#E2E8F0] rounded-lg text-xs font-semibold transition"
+                              title="0 students placed (Click to view)"
+                            >
+                              <GraduationCap className="h-3.5 w-3.5 text-[#94A3B8]" />
+                              <span className="text-[11px]">0</span>
+                            </button>
+                          )
                         ) : (
-                          <span className="text-slate-300">-</span>
+                          <button
+                            onClick={() => handleOpenPlacedStudentsModal(comp)}
+                            className="inline-flex items-center gap-1 px-1.5 py-1 text-slate-300 hover:text-slate-500 rounded text-xs transition"
+                            title="Drive not completed yet (Click to view)"
+                          >
+                            <GraduationCap className="h-3.5 w-3.5 opacity-40" />
+                            <span className="text-[11px] opacity-60">-</span>
+                          </button>
                         )}
                       </td>
 
@@ -828,23 +873,24 @@ export const FacultyMembersTab: React.FC<FacultyMembersTabProps> = ({ currentUse
                           )}
 
                           {/* View JD Button */}
-                          {comp.has_jd || comp.jd_file_path ? (
+                          {comp.has_jd || comp.jd_file_path || comp.jd_pdf_link ? (
                             <a
-                              href={api.getCompanyJDUrl(comp.id, false)}
+                              href={comp.jd_file_path ? api.getCompanyJDUrl(comp.id, false) : (comp.jd_pdf_link || '#')}
                               target="_blank"
                               rel="noreferrer"
-                              className="px-1.5 py-1 text-[#3B82F6] hover:bg-blue-50 border border-blue-200 rounded-md transition text-[11px] font-bold inline-flex items-center gap-1"
-                              title={`View JD: ${comp.jd_file_name || 'Job Description'}`}
+                              className="px-2 py-1 text-[#3B82F6] hover:bg-blue-50 border border-blue-200 rounded-md transition text-xs font-bold inline-flex items-center gap-1 shadow-2xs"
+                              title={`View JD: ${comp.jd_file_name || 'Job Description (PDF)'}`}
                             >
                               <FileText className="h-3.5 w-3.5" />
                               <span>JD</span>
                             </a>
                           ) : (
                             <span
-                              className="px-1.5 py-1 text-slate-300 border border-slate-200 rounded-md text-[11px] font-medium inline-flex items-center gap-0.5 cursor-not-allowed"
-                              title="JD Not Available"
+                              className="px-2 py-1 text-slate-300 border border-slate-200 rounded-md text-xs font-medium inline-flex items-center gap-1 cursor-not-allowed"
+                              title="No JD uploaded"
                             >
                               <FileText className="h-3.5 w-3.5 opacity-40" />
+                              <span className="opacity-60">JD</span>
                             </span>
                           )}
 
@@ -852,9 +898,9 @@ export const FacultyMembersTab: React.FC<FacultyMembersTabProps> = ({ currentUse
                           <button
                             onClick={() => handleOpenEditModal(comp)}
                             className="p-1 text-[#3B82F6] hover:bg-blue-50 border border-blue-200 rounded-md transition"
-                            title="Edit Details"
+                            title="Edit Company & JD"
                           >
-                            <Edit className="h-3.5 w-3.5" />
+                            <Edit3 className="h-3.5 w-3.5" />
                           </button>
 
                           {/* Delete Button */}
@@ -1097,24 +1143,36 @@ export const FacultyMembersTab: React.FC<FacultyMembersTabProps> = ({ currentUse
                   </div>
                 )}
 
-                {/* 11. Job Description (JD) Document Upload */}
-                <div className="sm:col-span-2 p-3.5 bg-[#F8FAFC] border border-[#E2E8F0] rounded-lg space-y-2">
+                {/* 11. JOB DESCRIPTION (JD) SECTION */}
+                <div className="sm:col-span-2 p-4 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl space-y-3">
                   <div className="flex items-center justify-between">
                     <label className="font-bold text-[#1E293B] flex items-center gap-1.5 text-xs">
                       <FileText className="h-4 w-4 text-[#3B82F6]" />
-                      Job Description (JD) <span className="font-normal text-[#64748B] text-[11px]">(Optional — PDF, DOC, DOCX)</span>
+                      JOB DESCRIPTION (JD)
                     </label>
+                    <span className="text-[11px] text-[#64748B] font-medium">PDF Only &bull; Max 10 MB</span>
                   </div>
 
-                  {/* Hidden file input */}
+                  {/* Hidden file input for PDF */}
                   <input
                     type="file"
                     ref={jdFileInputRef}
-                    accept=".pdf,.doc,.docx"
+                    accept="application/pdf,.pdf"
                     className="hidden"
                     onChange={(e) => {
                       const file = e.target.files?.[0];
                       if (file) {
+                        if (file.size > 10 * 1024 * 1024) {
+                          setFormError('JD file size must be less than 10 MB.');
+                          if (jdFileInputRef.current) jdFileInputRef.current.value = '';
+                          return;
+                        }
+                        if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
+                          setFormError('Only PDF files are accepted for Job Description.');
+                          if (jdFileInputRef.current) jdFileInputRef.current.value = '';
+                          return;
+                        }
+                        setFormError(null);
                         setJdFile(file);
                         setRemoveJd(false);
                       }
@@ -1123,21 +1181,23 @@ export const FacultyMembersTab: React.FC<FacultyMembersTabProps> = ({ currentUse
 
                   {/* Case A: Newly selected JD file */}
                   {jdFile ? (
-                    <div className="flex items-center justify-between p-2.5 bg-blue-50/70 border border-blue-200 rounded-lg">
-                      <div className="flex items-center gap-2 overflow-hidden">
-                        <FileText className="h-4 w-4 text-[#3B82F6] shrink-0" />
+                    <div className="flex items-center justify-between p-3 bg-blue-50/80 border border-blue-200 rounded-xl">
+                      <div className="flex items-center gap-2.5 overflow-hidden">
+                        <div className="p-2 bg-blue-100 text-[#3B82F6] rounded-lg shrink-0">
+                          <FileText className="h-4 w-4" />
+                        </div>
                         <div className="truncate">
                           <p className="font-bold text-[#1E293B] text-xs truncate">{jdFile.name}</p>
                           <p className="text-[10px] text-[#64748B]">{(jdFile.size / (1024 * 1024)).toFixed(2)} MB &bull; Ready to upload</p>
                         </div>
                       </div>
-                      <div className="flex items-center gap-1 shrink-0">
+                      <div className="flex items-center gap-1.5 shrink-0">
                         <button
                           type="button"
                           onClick={() => jdFileInputRef.current?.click()}
-                          className="px-2 py-1 bg-white hover:bg-blue-100 text-[#3B82F6] text-[11px] font-semibold border border-blue-200 rounded transition"
+                          className="px-2.5 py-1 bg-white hover:bg-blue-100 text-[#3B82F6] text-xs font-semibold border border-blue-200 rounded-lg transition"
                         >
-                          Change
+                          Replace
                         </button>
                         <button
                           type="button"
@@ -1145,18 +1205,20 @@ export const FacultyMembersTab: React.FC<FacultyMembersTabProps> = ({ currentUse
                             setJdFile(null);
                             if (jdFileInputRef.current) jdFileInputRef.current.value = '';
                           }}
-                          className="p-1 text-rose-600 hover:bg-rose-50 rounded transition"
+                          className="px-2 py-1 text-rose-600 hover:bg-rose-50 border border-rose-200 text-xs font-semibold rounded-lg transition"
                           title="Remove file"
                         >
-                          <X className="h-3.5 w-3.5" />
+                          Remove
                         </button>
                       </div>
                     </div>
                   ) : existingJdName && !removeJd ? (
                     /* Case B: Existing JD file from previous save */
-                    <div className="flex items-center justify-between p-2.5 bg-emerald-50/70 border border-emerald-200 rounded-lg">
-                      <div className="flex items-center gap-2 overflow-hidden">
-                        <FileText className="h-4 w-4 text-emerald-700 shrink-0" />
+                    <div className="flex items-center justify-between p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl">
+                      <div className="flex items-center gap-2.5 overflow-hidden">
+                        <div className="p-2 bg-emerald-100 text-emerald-700 rounded-lg shrink-0">
+                          <FileText className="h-4 w-4" />
+                        </div>
                         <div className="truncate">
                           <p className="font-bold text-emerald-950 text-xs truncate">{existingJdName}</p>
                           <p className="text-[10px] text-emerald-700 font-medium">Currently attached JD</p>
@@ -1168,17 +1230,18 @@ export const FacultyMembersTab: React.FC<FacultyMembersTabProps> = ({ currentUse
                             href={api.getCompanyJDUrl(editingId, false)}
                             target="_blank"
                             rel="noreferrer"
-                            className="px-2 py-1 bg-white hover:bg-emerald-100 text-emerald-800 text-[11px] font-semibold border border-emerald-300 rounded transition"
+                            className="px-2.5 py-1 bg-white hover:bg-emerald-100 text-emerald-800 text-xs font-semibold border border-emerald-300 rounded-lg transition inline-flex items-center gap-1"
                           >
-                            View
+                            <ExternalLink className="h-3 w-3" />
+                            <span>View JD</span>
                           </a>
                         )}
                         <button
                           type="button"
                           onClick={() => jdFileInputRef.current?.click()}
-                          className="px-2 py-1 bg-white hover:bg-blue-50 text-[#3B82F6] text-[11px] font-semibold border border-blue-200 rounded transition"
+                          className="px-2.5 py-1 bg-white hover:bg-blue-50 text-[#3B82F6] text-xs font-semibold border border-blue-200 rounded-lg transition"
                         >
-                          Replace
+                          Replace JD
                         </button>
                         <button
                           type="button"
@@ -1186,30 +1249,30 @@ export const FacultyMembersTab: React.FC<FacultyMembersTabProps> = ({ currentUse
                             setRemoveJd(true);
                             setJdFile(null);
                           }}
-                          className="px-2 py-1 bg-white hover:bg-rose-50 text-rose-600 text-[11px] font-semibold border border-rose-200 rounded transition"
+                          className="px-2.5 py-1 bg-white hover:bg-rose-50 text-rose-600 text-xs font-semibold border border-rose-200 rounded-lg transition"
                           title="Remove JD from company"
                         >
-                          Remove
+                          Remove JD
                         </button>
                       </div>
                     </div>
                   ) : (
-                    /* Case C: No JD / Removed -> Choose button */
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 bg-white border border-dashed border-[#CBD5E1] rounded-lg">
-                      <div className="text-[11px] text-[#64748B]">
+                    /* Case C: No JD / Removed -> Upload JD (PDF) button */
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-white border border-dashed border-[#CBD5E1] rounded-xl">
+                      <div className="text-xs text-[#64748B]">
                         {removeJd ? (
                           <span className="text-amber-700 font-semibold">JD will be removed upon saving.</span>
                         ) : (
-                          <span>Attach Job Description document (Max 10 MB).</span>
+                          <span>Attach Job Description document (PDF only, max 10 MB).</span>
                         )}
                       </div>
                       <button
                         type="button"
                         onClick={() => jdFileInputRef.current?.click()}
-                        className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 bg-[#EFF6FF] hover:bg-blue-100 text-[#3B82F6] text-xs font-semibold border border-blue-200 rounded-lg transition shrink-0"
+                        className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#3B82F6] hover:bg-[#2563EB] text-white text-xs font-bold rounded-xl transition shrink-0 shadow-sm"
                       >
-                        <Upload className="h-3.5 w-3.5" />
-                        <span>Choose JD File</span>
+                        <FileText className="h-3.5 w-3.5" />
+                        <span>📄 Upload JD (PDF)</span>
                       </button>
                     </div>
                   )}
@@ -1599,6 +1662,110 @@ export const FacultyMembersTab: React.FC<FacultyMembersTabProps> = ({ currentUse
               <button
                 onClick={() => setSelectedCompanyForRegistrations(null)}
                 className="px-4 py-2 bg-[#1E293B] hover:bg-slate-800 text-white font-semibold rounded-xl"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PLACED STUDENTS MODAL */}
+      {placedModalCompany && (
+        <div 
+          className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setPlacedModalCompany(null)}
+        >
+          <div 
+            className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 border border-[#E2E8F0] space-y-4 max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-100"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0]">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
+                  <GraduationCap className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-[#1E293B] text-base">Placed Students</h3>
+                  <p className="text-xs text-[#64748B]">
+                    {placedModalCompany.name} &bull; {placedModalCompany.ctc_lpa ? `${placedModalCompany.ctc_lpa} LPA` : (placedModalCompany.package_offered || 'N/A')}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setPlacedModalCompany(null)}
+                className="p-1 text-[#64748B] hover:text-[#1E293B] rounded-lg"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {placedStudentsError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg text-xs font-medium flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 text-rose-600 shrink-0" />
+                <span>{placedStudentsError}</span>
+              </div>
+            )}
+
+            {/* Total Placed Summary Banner */}
+            <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                <span className="text-xs font-bold text-emerald-950">
+                  Total Placed: {placedStudentsList.length}
+                </span>
+              </div>
+              <span className="text-[11px] font-semibold text-emerald-800 bg-white px-2 py-0.5 rounded-md border border-emerald-200">
+                Capacity: {placedStudentsList.length} / {placedModalCompany.no_of_hirings ?? placedModalCompany.employee_count ?? 0}
+              </span>
+            </div>
+
+            {loadingPlacedStudents ? (
+              <div className="py-12 text-center text-xs text-[#64748B]">
+                <div className="animate-spin h-5 w-5 border-2 border-emerald-600 border-t-transparent rounded-full mx-auto mb-2"></div>
+                Loading verified placement records from database...
+              </div>
+            ) : placedStudentsList.length === 0 ? (
+              <div className="py-10 text-center text-[#64748B] space-y-1.5 bg-[#F8FAFC] rounded-xl border border-[#E2E8F0] p-4">
+                <GraduationCap className="h-8 w-8 text-[#94A3B8] mx-auto mb-1" />
+                <p className="font-bold text-xs text-[#1E293B]">No students placed yet</p>
+                <p className="text-[11px] text-[#64748B]">
+                  Candidates placed into {placedModalCompany.name} via the placement workflow will automatically appear here.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                {placedStudentsList.map((student, sIdx) => (
+                  <div
+                    key={student.id || sIdx}
+                    className="p-3 bg-[#F8FAFC] hover:bg-[#EFF6FF]/60 border border-[#E2E8F0] rounded-xl transition flex items-start justify-between gap-3 text-xs"
+                  >
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
+                      <div className="min-w-0">
+                        <p className="font-bold text-[#1E293B] truncate">{student.name}</p>
+                        <p className="font-mono text-[11px] font-semibold text-[#3B82F6]">{student.reg_no}</p>
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      <span className="px-2 py-0.5 bg-white text-[#1E293B] font-bold rounded-md border border-[#E2E8F0] text-[11px]">
+                        {student.department}
+                      </span>
+                      {student.placement_date && (
+                        <p className="text-[10px] text-[#64748B] mt-1">{student.placement_date}</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="pt-2 border-t border-[#E2E8F0] flex justify-end">
+              <button
+                type="button"
+                onClick={() => setPlacedModalCompany(null)}
+                className="px-4 py-2 bg-[#1E293B] hover:bg-slate-800 text-white font-bold text-xs rounded-xl transition"
               >
                 Close
               </button>

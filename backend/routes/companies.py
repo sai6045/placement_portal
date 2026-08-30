@@ -17,7 +17,7 @@ companies_bp = Blueprint('companies', __name__)
 COMPANY_STATUSES = ['Cold', 'Warm', 'Hot', 'Drive Completed']
 APPROVAL_STATUSES = ['PENDING', 'APPROVED', 'REJECTED']
 
-ALLOWED_JD_EXTENSIONS = {'pdf', 'doc', 'docx'}
+ALLOWED_JD_EXTENSIONS = {'pdf'}
 MAX_JD_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 
 def get_current_user_role():
@@ -67,7 +67,7 @@ def handle_jd_file_upload(file):
 
     filename = file.filename
     if not allowed_jd_file(filename):
-        return None, None, 'Please upload a valid JD document (PDF, DOC, or DOCX).'
+        return None, None, 'Please upload a PDF file.'
 
     # Check file size
     file.seek(0, os.SEEK_END)
@@ -75,11 +75,12 @@ def handle_jd_file_upload(file):
     file.seek(0)
 
     if file_length > MAX_JD_FILE_SIZE:
-        return None, None, 'JD file is too large. Maximum allowed size is 10 MB.'
+        return None, None, 'File size must be less than 10 MB.'
 
     # Safe unique filename
     orig_secure = secure_filename(filename) or 'job_description.pdf'
-    ext = orig_secure.rsplit('.', 1)[1].lower() if '.' in orig_secure else 'pdf'
+    if not orig_secure.lower().endswith('.pdf'):
+        orig_secure += '.pdf'
     unique_name = f"jd_{uuid.uuid4().hex[:12]}_{orig_secure}"
     
     upload_dir = get_jd_upload_dir()
@@ -583,6 +584,46 @@ def get_company(company_id):
         print(f"[ERROR] get_company failed: {traceback.format_exc()}")
         return jsonify({'error': 'Failed to retrieve company', 'details': str(e)}), 500
 
+@companies_bp.route('/<int:company_id>/placed-students', methods=['GET'])
+def get_company_placed_students(company_id):
+    """Retrieve actual students placed in this company directly from Supabase / database"""
+    try:
+        company = db.session.get(Company, company_id)
+        if not company:
+            return jsonify({'error': 'Company not found'}), 404
+
+        students = Student.query.filter(
+            (Student.placed_company_id == company.id) |
+            (Student.placed_company.ilike(company.name.strip()))
+        ).filter(
+            (Student.placement_status == 'PLACED') | (Student.placement_status == 'Placed') | (Student.placement_status == 'YES')
+        ).order_by(Student.name.asc()).all()
+
+        placed_list = []
+        for s in students:
+            placed_list.append({
+                'id': s.id,
+                'reg_no': s.reg_no,
+                'name': s.name,
+                'department': s.department or s.dept or 'N/A',
+                'gender': s.gender or '',
+                'email': s.email or '',
+                'phone': s.phone or '',
+                'salary_package': s.salary_package or (f"{company.ctc_lpa} LPA" if company.ctc_lpa else 'N/A'),
+                'placed_ctc_lpa': s.placed_ctc_lpa or company.ctc_lpa,
+                'placement_date': s.placement_date or ''
+            })
+
+        return jsonify({
+            'company_id': company.id,
+            'company_name': company.name,
+            'total_placed': len(placed_list),
+            'students': placed_list
+        }), 200
+    except Exception as e:
+        print(f"[ERROR] get_company_placed_students failed: {traceback.format_exc()}")
+        return jsonify({'error': 'Failed to retrieve placed students for company', 'details': str(e)}), 500
+
 @companies_bp.route('/<int:company_id>/jd', methods=['GET'])
 def get_company_jd(company_id):
     """Secure endpoint to view or download company Job Description (JD)"""
@@ -623,6 +664,84 @@ def get_company_jd(company_id):
     except Exception as e:
         print(f"[ERROR] get_company_jd failed: {traceback.format_exc()}")
         return jsonify({'error': 'Failed to retrieve Job Description', 'details': str(e)}), 500
+
+@companies_bp.route('/<int:company_id>/jd', methods=['POST'])
+def upload_company_jd(company_id):
+    """Endpoint for uploading or replacing a company Job Description (JD) PDF"""
+    try:
+        company = db.session.get(Company, company_id)
+        if not company:
+            return jsonify({'error': 'Company not found'}), 404
+
+        if 'jd_file' not in request.files and 'file' not in request.files:
+            return jsonify({'error': 'No file uploaded. Please upload a PDF file.'}), 400
+
+        file = request.files.get('jd_file') or request.files.get('file')
+        if not file or not file.filename:
+            return jsonify({'error': 'Please select a valid PDF file.'}), 400
+
+        rel_path, orig_name, err = handle_jd_file_upload(file)
+        if err:
+            return jsonify({'error': err}), 400
+
+        # Remove old JD file if replacing
+        if company.jd_file_path:
+            try:
+                backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+                old_file = os.path.join(backend_dir, company.jd_file_path)
+                if os.path.exists(old_file):
+                    os.remove(old_file)
+            except Exception as e:
+                print(f"[WARN] Failed to remove previous JD file: {e}")
+
+        company.jd_file_path = rel_path
+        company.jd_file_name = orig_name
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'message': 'Job Description uploaded successfully',
+            'jd_url': f"/api/companies/{company.id}/jd",
+            'jd_filename': company.jd_file_name,
+            'company': company.to_dict()
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERROR] upload_company_jd failed: {traceback.format_exc()}")
+        return jsonify({'error': 'Failed to upload Job Description', 'details': str(e)}), 500
+
+@companies_bp.route('/<int:company_id>/jd', methods=['DELETE'])
+def remove_company_jd(company_id):
+    """Endpoint to remove an existing Job Description (JD) from a company"""
+    try:
+        company = db.session.get(Company, company_id)
+        if not company:
+            return jsonify({'error': 'Company not found'}), 404
+
+        if company.jd_file_path:
+            try:
+                backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+                old_file = os.path.join(backend_dir, company.jd_file_path)
+                if os.path.exists(old_file):
+                    os.remove(old_file)
+            except Exception as e:
+                print(f"[WARN] Failed to delete JD file: {e}")
+
+        company.jd_file_path = None
+        company.jd_file_name = None
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'message': 'Job Description removed successfully',
+            'company': company.to_dict()
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERROR] remove_company_jd failed: {traceback.format_exc()}")
+        return jsonify({'error': 'Failed to remove Job Description', 'details': str(e)}), 500
 
 @companies_bp.route('/', methods=['POST'])
 def add_company():

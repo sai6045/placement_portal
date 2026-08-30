@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Company, CompanyStatus, ApprovalStatus, User, CompanyRegistration } from '../types';
 import { api } from '../api';
 import { 
@@ -13,6 +13,7 @@ import {
   CheckCircle, 
   XCircle, 
   Clock, 
+  Edit,
   Edit3, 
   X, 
   MapPin, 
@@ -30,25 +31,37 @@ import {
   Copy,
   Users,
   Link2,
-  GraduationCap
+  GraduationCap,
+  Upload,
+  Trash2
 } from 'lucide-react';
 
 interface CompanyDetailsTabProps {
   currentUser: User;
   refreshTrigger?: number;
+  initialFilter?: { status?: string; approvalStatus?: string } | null;
 }
 
 type CompanySortField = 'id' | 'name' | 'location' | 'no_of_hirings' | 'ctc_lpa' | 'placed_students' | 'status' | 'approval_status';
 type SortOrder = 'asc' | 'desc' | null;
 
-export const CompanyDetailsTab: React.FC<CompanyDetailsTabProps> = ({ currentUser, refreshTrigger }) => {
+export const CompanyDetailsTab: React.FC<CompanyDetailsTabProps> = ({ currentUser, refreshTrigger, initialFilter }) => {
   const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Search & Filters
   const [search, setSearch] = useState('');
-  const [selectedStatus, setSelectedStatus] = useState<string>('');
-  const [selectedApprovalStatus, setSelectedApprovalStatus] = useState<string>('');
+  const [selectedStatus, setSelectedStatus] = useState<string>(initialFilter?.status || '');
+  const [selectedApprovalStatus, setSelectedApprovalStatus] = useState<string>(initialFilter?.approvalStatus || '');
+
+  useEffect(() => {
+    if (initialFilter?.status !== undefined) {
+      setSelectedStatus(initialFilter.status);
+    }
+    if (initialFilter?.approvalStatus !== undefined) {
+      setSelectedApprovalStatus(initialFilter.approvalStatus);
+    }
+  }, [initialFilter]);
 
   // Sorting
   const [sortField, setSortField] = useState<CompanySortField | null>(null);
@@ -75,12 +88,56 @@ export const CompanyDetailsTab: React.FC<CompanyDetailsTabProps> = ({ currentUse
   const [regPlacementStatus, setRegPlacementStatus] = useState('');
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
 
-  // Status editing modal
+  // Placed Students Modal State
+  const [placedModalCompany, setPlacedModalCompany] = useState<Company | null>(null);
+  const [placedStudentsList, setPlacedStudentsList] = useState<any[]>([]);
+  const [loadingPlacedStudents, setLoadingPlacedStudents] = useState(false);
+  const [placedStudentsError, setPlacedStudentsError] = useState<string | null>(null);
+
+  const handleOpenPlacedStudentsModal = async (comp: Company) => {
+    setPlacedModalCompany(comp);
+    setPlacedStudentsList([]);
+    setPlacedStudentsError(null);
+    setLoadingPlacedStudents(true);
+    try {
+      const data = await api.getCompanyPlacedStudents(comp.id);
+      setPlacedStudentsList(data.students || []);
+    } catch (err: any) {
+      console.error('Failed to load placed students for company:', err);
+      setPlacedStudentsError(err.response?.data?.error || err.response?.data?.details || 'Failed to load placed candidates.');
+    } finally {
+      setLoadingPlacedStudents(false);
+    }
+  };
+
+  // Status editing modal (Relationship Status only)
   const [editingCompany, setEditingCompany] = useState<Company | null>(null);
   const [newStatus, setNewStatus] = useState<CompanyStatus>('Warm');
   const [editPlacedStudents, setEditPlacedStudents] = useState<number>(0);
   const [statusEditError, setStatusEditError] = useState<string | null>(null);
   const [updating, setUpdating] = useState(false);
+
+  // Full Company & JD Edit Modal State
+  const [fullEditModalCompany, setFullEditModalCompany] = useState<Company | null>(null);
+  const [fullEditForm, setFullEditForm] = useState({
+    company_name: '',
+    location: '',
+    website: '',
+    contact_person_number: '',
+    contact_person_email: '',
+    no_of_hirings: 10,
+    ctc_lpa: 6.0,
+    status: 'Cold' as CompanyStatus,
+    google_maps_link: '',
+    placed_students: 0
+  });
+  const [editJdFile, setEditJdFile] = useState<File | null>(null);
+  const [existingJdName, setExistingJdName] = useState<string | null>(null);
+  const [removeJd, setRemoveJd] = useState(false);
+  const [fullEditSubmitting, setFullEditSubmitting] = useState(false);
+  const [fullEditError, setFullEditError] = useState<string | null>(null);
+  const [fullEditSuccess, setFullEditSuccess] = useState<string | null>(null);
+  const jdFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const fetchCompanies = () => {
     setLoading(true);
@@ -173,7 +230,11 @@ export const CompanyDetailsTab: React.FC<CompanyDetailsTabProps> = ({ currentUse
 
     // Relationship status filter
     if (selectedStatus) {
-      result = result.filter(c => c.status === selectedStatus);
+      if (selectedStatus === 'ACTIVE') {
+        result = result.filter(c => c.status === 'Hot' || c.status === 'Warm');
+      } else {
+        result = result.filter(c => c.status === selectedStatus);
+      }
     }
 
     // Approval status filter
@@ -454,6 +515,119 @@ export const CompanyDetailsTab: React.FC<CompanyDetailsTabProps> = ({ currentUse
       setStatusEditError(err.response?.data?.error || 'Failed to update company status');
     } finally {
       setUpdating(false);
+    }
+  };
+
+  const handleOpenFullEdit = (comp: Company) => {
+    setFullEditModalCompany(comp);
+    setFullEditForm({
+      company_name: comp.company_name || comp.name,
+      location: comp.location || '',
+      website: comp.website || '',
+      contact_person_number: comp.contact_person_number || comp.contact_phone || '',
+      contact_person_email: comp.contact_person_email || comp.contact_email || '',
+      no_of_hirings: comp.no_of_hirings ?? comp.employee_count ?? 10,
+      ctc_lpa: comp.ctc_lpa ?? 6.0,
+      status: comp.status || 'Cold',
+      google_maps_link: comp.google_maps_link || comp.company_address || '',
+      placed_students: comp.placed_students ?? 0
+    });
+    setEditJdFile(null);
+    setExistingJdName(comp.jd_file_name || (comp.jd_file_path ? `${(comp.company_name || comp.name).replace(/\s+/g, '-')}-JD.pdf` : null));
+    setRemoveJd(false);
+    setFullEditError(null);
+    setFullEditSuccess(null);
+  };
+
+  const handleFullEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!fullEditModalCompany) return;
+    setFullEditSubmitting(true);
+    setFullEditError(null);
+    setFullEditSuccess(null);
+
+    // Validations
+    if (!fullEditForm.company_name.trim()) {
+      setFullEditError('Company Name is required.');
+      setFullEditSubmitting(false);
+      return;
+    }
+    if (!fullEditForm.location.trim()) {
+      setFullEditError('Location is required.');
+      setFullEditSubmitting(false);
+      return;
+    }
+    if (!fullEditForm.google_maps_link.trim()) {
+      setFullEditError('Google Maps Location Link is required.');
+      setFullEditSubmitting(false);
+      return;
+    }
+    if (fullEditForm.no_of_hirings < 0) {
+      setFullEditError('Number of hirings cannot be negative.');
+      setFullEditSubmitting(false);
+      return;
+    }
+    if (!fullEditForm.ctc_lpa || fullEditForm.ctc_lpa <= 0) {
+      setFullEditError('CTC (LPA) must be greater than 0.');
+      setFullEditSubmitting(false);
+      return;
+    }
+
+    if (fullEditForm.status === 'Drive Completed') {
+      if (fullEditForm.placed_students < 0) {
+        setFullEditError('Number of placed students cannot be negative.');
+        setFullEditSubmitting(false);
+        return;
+      }
+      if (fullEditForm.placed_students > fullEditForm.no_of_hirings) {
+        setFullEditError(`Placed students cannot exceed total hirings (${fullEditForm.no_of_hirings}).`);
+        setFullEditSubmitting(false);
+        return;
+      }
+    }
+
+    try {
+      const formData = new FormData();
+      formData.append('name', fullEditForm.company_name);
+      formData.append('company_name', fullEditForm.company_name);
+      formData.append('location', fullEditForm.location);
+      formData.append('website', fullEditForm.website);
+      formData.append('contact_person_number', fullEditForm.contact_person_number);
+      formData.append('contact_phone', fullEditForm.contact_person_number);
+      formData.append('contact_person_email', fullEditForm.contact_person_email);
+      formData.append('contact_email', fullEditForm.contact_person_email);
+      formData.append('no_of_hirings', String(fullEditForm.no_of_hirings));
+      formData.append('ctc_lpa', String(fullEditForm.ctc_lpa));
+      formData.append('placed_students', String(fullEditForm.status === 'Drive Completed' ? fullEditForm.placed_students : 0));
+      formData.append('google_maps_link', fullEditForm.google_maps_link);
+      formData.append('company_address', fullEditForm.google_maps_link);
+      formData.append('status', fullEditForm.status);
+
+      if (editJdFile) {
+        formData.append('jd_file', editJdFile);
+      }
+      if (removeJd) {
+        formData.append('remove_jd', 'true');
+      }
+
+      await api.updateCompany(fullEditModalCompany.id, formData);
+      setFullEditSuccess('Company details & Job Description updated successfully!');
+
+      setTimeout(() => {
+        setFullEditModalCompany(null);
+        setFullEditSuccess(null);
+        setEditJdFile(null);
+        setExistingJdName(null);
+        setRemoveJd(false);
+        fetchCompanies();
+        if (selectedCompanyFull && selectedCompanyFull.id === fullEditModalCompany.id) {
+          api.getCompany(fullEditModalCompany.id).then(updated => setSelectedCompanyFull(updated)).catch(() => {});
+        }
+      }, 1000);
+    } catch (err: any) {
+      setFullEditError(err.response?.data?.error || err.response?.data?.details || 'Failed to update company details.');
+    } finally {
+      setFullEditSubmitting(false);
     }
   };
 
@@ -740,14 +914,37 @@ export const CompanyDetailsTab: React.FC<CompanyDetailsTabProps> = ({ currentUse
                         </span>
                       </td>
 
-                      {/* Placed Students (Only shown when Drive Completed) */}
+                      {/* Placed Students (Compact Icon Button with Popover / Modal) */}
                       <td className="py-3.5 px-4 text-center">
                         {isDriveCompleted ? (
-                          <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 font-extrabold rounded-full border border-emerald-300">
-                            {comp.placed_students ?? 0} Placed
-                          </span>
+                          (comp.placed_students ?? 0) > 0 ? (
+                            <button
+                              onClick={() => handleOpenPlacedStudentsModal(comp)}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 hover:text-emerald-800 border border-emerald-300 rounded-lg text-xs font-extrabold transition shadow-2xs group"
+                              title={`Click to view ${comp.placed_students} placed student(s)`}
+                            >
+                              <GraduationCap className="h-3.5 w-3.5 text-emerald-600 group-hover:scale-110 transition-transform" />
+                              <span className="text-[11px]">{comp.placed_students}</span>
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleOpenPlacedStudentsModal(comp)}
+                              className="inline-flex items-center gap-1 px-2 py-1 bg-[#F8FAFC] hover:bg-slate-100 text-[#64748B] hover:text-[#1E293B] border border-[#E2E8F0] rounded-lg text-xs font-semibold transition"
+                              title="0 students placed (Click to view)"
+                            >
+                              <GraduationCap className="h-3.5 w-3.5 text-[#94A3B8]" />
+                              <span className="text-[11px]">0</span>
+                            </button>
+                          )
                         ) : (
-                          <span className="text-slate-300">-</span>
+                          <button
+                            onClick={() => handleOpenPlacedStudentsModal(comp)}
+                            className="inline-flex items-center gap-1 px-1.5 py-1 text-slate-300 hover:text-slate-500 rounded text-xs transition"
+                            title="Drive not completed yet (Click to view)"
+                          >
+                            <GraduationCap className="h-3.5 w-3.5 opacity-40" />
+                            <span className="text-[11px] opacity-60">-</span>
+                          </button>
                         )}
                       </td>
 
@@ -783,13 +980,13 @@ export const CompanyDetailsTab: React.FC<CompanyDetailsTabProps> = ({ currentUse
                           )}
 
                           {/* JD Button */}
-                          {comp.has_jd || comp.jd_file_path ? (
+                          {comp.has_jd || comp.jd_file_path || comp.jd_pdf_link ? (
                             <a
-                              href={api.getCompanyJDUrl(comp.id, false)}
+                              href={comp.jd_file_path ? api.getCompanyJDUrl(comp.id, false) : (comp.jd_pdf_link || '#')}
                               target="_blank"
                               rel="noreferrer"
-                              className="px-2 py-1 text-xs font-semibold text-[#3B82F6] bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-md transition inline-flex items-center gap-1"
-                              title={`View JD: ${comp.jd_file_name || 'Job Description'}`}
+                              className="px-2 py-1 text-xs font-bold text-[#3B82F6] bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-md transition inline-flex items-center gap-1 shadow-2xs"
+                              title={`View JD: ${comp.jd_file_name || 'Job Description (PDF)'}`}
                             >
                               <FileText className="h-3 w-3" />
                               <span>JD</span>
@@ -797,7 +994,7 @@ export const CompanyDetailsTab: React.FC<CompanyDetailsTabProps> = ({ currentUse
                           ) : (
                             <span
                               className="px-2 py-1 text-xs font-medium text-slate-300 border border-slate-200 rounded-md inline-flex items-center gap-1 cursor-not-allowed"
-                              title="JD Not Available"
+                              title="No JD uploaded"
                             >
                               <FileText className="h-3 w-3 opacity-40" />
                               <span className="opacity-60">JD</span>
@@ -813,11 +1010,11 @@ export const CompanyDetailsTab: React.FC<CompanyDetailsTabProps> = ({ currentUse
                             <Eye className="h-3 w-3" /> More
                           </button>
 
-                          {/* Quick Status Update */}
+                          {/* Edit Details & JD */}
                           <button
-                            onClick={() => handleOpenStatusEdit(comp)}
-                            className="p-1 text-[#64748B] hover:text-[#1E293B] hover:bg-[#F8FAFC] border border-[#E2E8F0] rounded-md transition"
-                            title="Update Relationship Status"
+                            onClick={() => handleOpenFullEdit(comp)}
+                            className="p-1 text-[#3B82F6] hover:bg-blue-50 border border-blue-200 rounded-md transition"
+                            title="Edit Company Details & Job Description"
                           >
                             <Edit3 className="h-3 w-3" />
                           </button>
@@ -1418,6 +1615,336 @@ export const CompanyDetailsTab: React.FC<CompanyDetailsTabProps> = ({ currentUse
         </div>
       )}
 
+      {/* EDIT COMPANY & JOB DESCRIPTION (JD) MODAL */}
+      {fullEditModalCompany && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-xl w-full p-6 border border-[#E2E8F0] max-h-[90vh] overflow-y-auto space-y-4">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0]">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-[#EFF6FF] text-[#3B82F6] rounded-xl border border-blue-100">
+                  <Edit className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-[#1E293B]">
+                    Edit Company Details — {fullEditModalCompany.company_name || fullEditModalCompany.name}
+                  </h3>
+                  <p className="text-xs text-[#64748B]">Update recruiter information and attach Job Description (JD) PDF</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setFullEditModalCompany(null)}
+                className="p-1.5 text-[#64748B] hover:text-[#1E293B] hover:bg-[#F8FAFC] rounded-lg transition"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Error / Success Notifications */}
+            {fullEditError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{fullEditError}</span>
+              </div>
+            )}
+            {fullEditSuccess && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+                <span>{fullEditSuccess}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleFullEditSubmit} className="space-y-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                {/* Company Name */}
+                <div className="sm:col-span-2">
+                  <label className="block font-semibold text-[#1E293B] mb-1">Company Name *</label>
+                  <input
+                    type="text"
+                    required
+                    value={fullEditForm.company_name}
+                    onChange={e => setFullEditForm({ ...fullEditForm, company_name: e.target.value })}
+                    className="w-full p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs font-semibold focus:ring-2 focus:ring-[#3B82F6]"
+                  />
+                </div>
+
+                {/* Location */}
+                <div>
+                  <label className="block font-semibold text-[#1E293B] mb-1">Location *</label>
+                  <input
+                    type="text"
+                    required
+                    value={fullEditForm.location}
+                    onChange={e => setFullEditForm({ ...fullEditForm, location: e.target.value })}
+                    className="w-full p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                  />
+                </div>
+
+                {/* Website */}
+                <div>
+                  <label className="block font-semibold text-[#1E293B] mb-1">Website URL</label>
+                  <input
+                    type="text"
+                    value={fullEditForm.website}
+                    onChange={e => setFullEditForm({ ...fullEditForm, website: e.target.value })}
+                    placeholder="https://company.com"
+                    className="w-full p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                  />
+                </div>
+
+                {/* Contact Phone */}
+                <div>
+                  <label className="block font-semibold text-[#1E293B] mb-1">Contact Phone</label>
+                  <input
+                    type="text"
+                    value={fullEditForm.contact_person_number}
+                    onChange={e => setFullEditForm({ ...fullEditForm, contact_person_number: e.target.value })}
+                    placeholder="e.g. +91 9876543210"
+                    className="w-full p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                  />
+                </div>
+
+                {/* Contact Email */}
+                <div>
+                  <label className="block font-semibold text-[#1E293B] mb-1">Contact Email</label>
+                  <input
+                    type="email"
+                    value={fullEditForm.contact_person_email}
+                    onChange={e => setFullEditForm({ ...fullEditForm, contact_person_email: e.target.value })}
+                    placeholder="hr@company.com"
+                    className="w-full p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                  />
+                </div>
+
+                {/* No. of Hirings */}
+                <div>
+                  <label className="block font-semibold text-[#1E293B] mb-1">No. of Hirings *</label>
+                  <input
+                    type="number"
+                    min="0"
+                    required
+                    value={fullEditForm.no_of_hirings}
+                    onChange={e => setFullEditForm({ ...fullEditForm, no_of_hirings: parseInt(e.target.value) || 0 })}
+                    className="w-full p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs font-semibold focus:ring-2 focus:ring-[#3B82F6]"
+                  />
+                </div>
+
+                {/* CTC (LPA) */}
+                <div>
+                  <label className="block font-semibold text-[#1E293B] mb-1">CTC (LPA) *</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    required
+                    value={fullEditForm.ctc_lpa}
+                    onChange={e => setFullEditForm({ ...fullEditForm, ctc_lpa: parseFloat(e.target.value) || 0 })}
+                    className="w-full p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs font-semibold focus:ring-2 focus:ring-[#3B82F6]"
+                  />
+                </div>
+
+                {/* Relationship Status */}
+                <div>
+                  <label className="block font-semibold text-[#1E293B] mb-1">Relationship Status *</label>
+                  <select
+                    value={fullEditForm.status}
+                    onChange={e => setFullEditForm({ ...fullEditForm, status: e.target.value as CompanyStatus })}
+                    className="w-full p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs font-semibold focus:ring-2 focus:ring-[#3B82F6]"
+                  >
+                    <option value="Cold">Cold</option>
+                    <option value="Warm">Warm</option>
+                    <option value="Hot">Hot</option>
+                    <option value="Drive Completed">Drive Completed</option>
+                  </select>
+                </div>
+
+                {/* Placed Candidates (Drive Completed only) */}
+                {fullEditForm.status === 'Drive Completed' && (
+                  <div className="p-2.5 bg-emerald-50/80 border border-emerald-300 rounded-lg">
+                    <label className="block font-bold text-emerald-900 mb-1">
+                      No. of Placed Students * (Max: {fullEditForm.no_of_hirings})
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      max={fullEditForm.no_of_hirings}
+                      required
+                      value={fullEditForm.placed_students}
+                      onChange={e => setFullEditForm({ ...fullEditForm, placed_students: parseInt(e.target.value) || 0 })}
+                      className="w-full p-1.5 bg-white border border-emerald-300 rounded-md text-xs font-bold text-emerald-900"
+                    />
+                  </div>
+                )}
+
+                {/* Google Maps Link */}
+                <div className="sm:col-span-2">
+                  <label className="block font-semibold text-[#1E293B] mb-1">Google Maps Location Link *</label>
+                  <input
+                    type="text"
+                    required
+                    value={fullEditForm.google_maps_link}
+                    onChange={e => setFullEditForm({ ...fullEditForm, google_maps_link: e.target.value })}
+                    placeholder="https://maps.google.com/..."
+                    className="w-full p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
+                  />
+                </div>
+
+                {/* JOB DESCRIPTION (JD) SECTION */}
+                <div className="sm:col-span-2 p-4 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="font-bold text-[#1E293B] flex items-center gap-1.5 text-xs">
+                      <FileText className="h-4 w-4 text-[#3B82F6]" />
+                      Job Description (JD)
+                    </label>
+                    <span className="text-[11px] text-[#64748B] font-medium">PDF Only &bull; Max 10 MB</span>
+                  </div>
+
+                  {/* Hidden PDF file input */}
+                  <input
+                    type="file"
+                    ref={jdFileInputRef}
+                    accept="application/pdf,.pdf"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        if (!file.name.toLowerCase().endsWith('.pdf') && file.type !== 'application/pdf') {
+                          setFullEditError('Please upload a PDF file.');
+                          if (jdFileInputRef.current) jdFileInputRef.current.value = '';
+                          return;
+                        }
+                        if (file.size > 10 * 1024 * 1024) {
+                          setFullEditError('File size must be less than 10 MB.');
+                          if (jdFileInputRef.current) jdFileInputRef.current.value = '';
+                          return;
+                        }
+                        setFullEditError(null);
+                        setEditJdFile(file);
+                        setRemoveJd(false);
+                      }
+                    }}
+                  />
+
+                  {/* Case A: Newly selected JD file */}
+                  {editJdFile ? (
+                    <div className="flex items-center justify-between p-3 bg-blue-50/80 border border-blue-200 rounded-xl">
+                      <div className="flex items-center gap-2.5 overflow-hidden">
+                        <div className="p-2 bg-blue-100 text-[#3B82F6] rounded-lg shrink-0">
+                          <FileText className="h-4 w-4" />
+                        </div>
+                        <div className="truncate">
+                          <p className="font-bold text-[#1E293B] text-xs truncate">📄 {editJdFile.name}</p>
+                          <p className="text-[10px] text-[#64748B]">{(editJdFile.size / (1024 * 1024)).toFixed(2)} MB &bull; Ready to save</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => jdFileInputRef.current?.click()}
+                          className="px-2.5 py-1 bg-white hover:bg-blue-100 text-[#3B82F6] text-xs font-semibold border border-blue-200 rounded-lg transition"
+                        >
+                          Replace
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditJdFile(null);
+                            if (jdFileInputRef.current) jdFileInputRef.current.value = '';
+                          }}
+                          className="px-2 py-1 text-rose-600 hover:bg-rose-50 border border-rose-200 text-xs font-semibold rounded-lg transition"
+                          title="Remove selected file"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  ) : existingJdName && !removeJd ? (
+                    /* Case B: Existing JD file from previous save */
+                    <div className="flex items-center justify-between p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl">
+                      <div className="flex items-center gap-2.5 overflow-hidden">
+                        <div className="p-2 bg-emerald-100 text-emerald-700 rounded-lg shrink-0">
+                          <FileText className="h-4 w-4" />
+                        </div>
+                        <div className="truncate">
+                          <p className="font-bold text-emerald-950 text-xs truncate">📄 {existingJdName}</p>
+                          <p className="text-[10px] text-emerald-700 font-medium">Currently attached JD PDF</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <a
+                          href={api.getCompanyJDUrl(fullEditModalCompany.id, false)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="px-2.5 py-1 bg-white hover:bg-emerald-100 text-emerald-800 text-xs font-semibold border border-emerald-300 rounded-lg transition inline-flex items-center gap-1"
+                        >
+                          <ExternalLink className="h-3 w-3" />
+                          <span>View JD</span>
+                        </a>
+                        <button
+                          type="button"
+                          onClick={() => jdFileInputRef.current?.click()}
+                          className="px-2.5 py-1 bg-white hover:bg-blue-50 text-[#3B82F6] text-xs font-semibold border border-blue-200 rounded-lg transition"
+                        >
+                          Replace JD
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRemoveJd(true);
+                            setEditJdFile(null);
+                          }}
+                          className="px-2.5 py-1 bg-white hover:bg-rose-50 text-rose-600 text-xs font-semibold border border-rose-200 rounded-lg transition"
+                          title="Remove JD from company"
+                        >
+                          Remove JD
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Case C: No JD / Removed -> Upload button */
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-white border border-dashed border-[#CBD5E1] rounded-xl">
+                      <div className="text-xs text-[#64748B]">
+                        {removeJd ? (
+                          <span className="text-amber-700 font-semibold">JD will be removed upon saving.</span>
+                        ) : (
+                          <span>Job Description: No JD uploaded</span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => jdFileInputRef.current?.click()}
+                        className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 bg-[#3B82F6] hover:bg-[#2563EB] text-white text-xs font-bold rounded-xl transition shrink-0 shadow-sm"
+                      >
+                        <FileText className="h-3.5 w-3.5" />
+                        <span>Upload JD PDF</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="pt-3 flex justify-end gap-2 border-t border-[#E2E8F0]">
+                <button
+                  type="button"
+                  onClick={() => setFullEditModalCompany(null)}
+                  className="px-4 py-2 bg-white text-[#64748B] font-semibold rounded-xl hover:bg-[#F8FAFC] border border-[#E2E8F0] transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={fullEditSubmitting}
+                  className="px-5 py-2 bg-[#3B82F6] hover:bg-[#2563EB] text-white font-bold rounded-xl disabled:opacity-50 transition shadow-sm"
+                >
+                  {fullEditSubmitting ? 'Saving Changes...' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* REGISTRATION LINK MODAL */}
       {registrationModalCompany && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
@@ -1502,6 +2029,110 @@ export const CompanyDetailsTab: React.FC<CompanyDetailsTabProps> = ({ currentUse
                   <span>View Registered Students ({registrationModalCompany.registered_students_count ?? 0})</span>
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PLACED STUDENTS MODAL */}
+      {placedModalCompany && (
+        <div 
+          className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setPlacedModalCompany(null)}
+        >
+          <div 
+            className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 border border-[#E2E8F0] space-y-4 max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-100"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0]">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
+                  <GraduationCap className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-[#1E293B] text-base">Placed Students</h3>
+                  <p className="text-xs text-[#64748B]">
+                    {placedModalCompany.name} &bull; {placedModalCompany.ctc_lpa ? `${placedModalCompany.ctc_lpa} LPA` : (placedModalCompany.package_offered || 'N/A')}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setPlacedModalCompany(null)}
+                className="p-1 text-[#64748B] hover:text-[#1E293B] rounded-lg"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {placedStudentsError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg text-xs font-medium flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 text-rose-600 shrink-0" />
+                <span>{placedStudentsError}</span>
+              </div>
+            )}
+
+            {/* Total Placed Summary Banner */}
+            <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                <span className="text-xs font-bold text-emerald-950">
+                  Total Placed: {placedStudentsList.length}
+                </span>
+              </div>
+              <span className="text-[11px] font-semibold text-emerald-800 bg-white px-2 py-0.5 rounded-md border border-emerald-200">
+                Capacity: {placedStudentsList.length} / {placedModalCompany.no_of_hirings ?? placedModalCompany.employee_count ?? 0}
+              </span>
+            </div>
+
+            {loadingPlacedStudents ? (
+              <div className="py-12 text-center text-xs text-[#64748B]">
+                <div className="animate-spin h-5 w-5 border-2 border-emerald-600 border-t-transparent rounded-full mx-auto mb-2"></div>
+                Loading verified placement records from database...
+              </div>
+            ) : placedStudentsList.length === 0 ? (
+              <div className="py-10 text-center text-[#64748B] space-y-1.5 bg-[#F8FAFC] rounded-xl border border-[#E2E8F0] p-4">
+                <GraduationCap className="h-8 w-8 text-[#94A3B8] mx-auto mb-1" />
+                <p className="font-bold text-xs text-[#1E293B]">No students placed yet</p>
+                <p className="text-[11px] text-[#64748B]">
+                  Candidates placed into {placedModalCompany.name} via the placement workflow will automatically appear here.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                {placedStudentsList.map((student, sIdx) => (
+                  <div
+                    key={student.id || sIdx}
+                    className="p-3 bg-[#F8FAFC] hover:bg-[#EFF6FF]/60 border border-[#E2E8F0] rounded-xl transition flex items-start justify-between gap-3 text-xs"
+                  >
+                    <div className="flex items-start gap-2.5 min-w-0">
+                      <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
+                      <div className="min-w-0">
+                        <p className="font-bold text-[#1E293B] truncate">{student.name}</p>
+                        <p className="font-mono text-[11px] font-semibold text-[#3B82F6]">{student.reg_no}</p>
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      <span className="px-2 py-0.5 bg-white text-[#1E293B] font-bold rounded-md border border-[#E2E8F0] text-[11px]">
+                        {student.department}
+                      </span>
+                      {student.placement_date && (
+                        <p className="text-[10px] text-[#64748B] mt-1">{student.placement_date}</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="pt-2 border-t border-[#E2E8F0] flex justify-end">
+              <button
+                type="button"
+                onClick={() => setPlacedModalCompany(null)}
+                className="px-4 py-2 bg-[#1E293B] hover:bg-slate-800 text-white font-bold text-xs rounded-xl transition"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>

@@ -62,6 +62,10 @@ export const api = {
     const res = await axios.post(`${API_BASE}/students/`, data);
     return res.data.student;
   },
+  updateStudent: async (id: number, data: Partial<StudentFull>): Promise<StudentFull> => {
+    const res = await axios.put(`${API_BASE}/students/${id}`, data);
+    return res.data.student;
+  },
   placeStudent: async (studentId: number, companyId: number): Promise<{ message: string; student: StudentFull; company: Company }> => {
     const res = await axios.post(`${API_BASE}/students/${studentId}/placement`, { company_id: companyId });
     return res.data;
@@ -94,6 +98,26 @@ export const api = {
     const res = await axios.get(`${API_BASE}/companies/${id}`);
     return res.data;
   },
+  getCompanyPlacedStudents: async (companyId: number): Promise<{
+    company_id: number;
+    company_name: string;
+    total_placed: number;
+    students: Array<{
+      id: number;
+      reg_no: string;
+      name: string;
+      department: string;
+      gender?: string;
+      email?: string;
+      phone?: string;
+      salary_package?: string;
+      placed_ctc_lpa?: number;
+      placement_date?: string;
+    }>;
+  }> => {
+    const res = await axios.get(`${API_BASE}/companies/${companyId}/placed-students`);
+    return res.data;
+  },
   addCompany: async (companyData: Partial<Company> | FormData): Promise<{ message: string; company: Company }> => {
     const isFormData = companyData instanceof FormData;
     const res = await axios.post(`${API_BASE}/companies/`, companyData, {
@@ -117,6 +141,18 @@ export const api = {
   },
   getCompanyJDUrl: (id: number, download: boolean = false): string => {
     return `${API_BASE}/companies/${id}/jd${download ? '?download=1' : ''}`;
+  },
+  uploadCompanyJD: async (id: number, file: File): Promise<{ success: boolean; message: string; jd_url: string; jd_filename: string; company: Company }> => {
+    const formData = new FormData();
+    formData.append('jd_file', file);
+    const res = await axios.post(`${API_BASE}/companies/${id}/jd`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+    return res.data;
+  },
+  deleteCompanyJD: async (id: number): Promise<{ success: boolean; message: string; company: Company }> => {
+    const res = await axios.delete(`${API_BASE}/companies/${id}/jd`);
+    return res.data;
   },
   approveCompany: async (id: number): Promise<{ message: string; company: Company }> => {
     const res = await axios.patch(`${API_BASE}/companies/${id}/approve`);

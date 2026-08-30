@@ -28,6 +28,18 @@ export function App() {
 
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
   const [companyRefreshTrigger, setCompanyRefreshTrigger] = useState(0);
+  const [studentInitialFilter, setStudentInitialFilter] = useState<{ placementStatus?: string; department?: string } | null>(null);
+  const [companyInitialFilter, setCompanyInitialFilter] = useState<{ status?: string; approvalStatus?: string } | null>(null);
+
+  const navigateToStudents = (filter?: { placementStatus?: string; department?: string }) => {
+    setStudentInitialFilter(filter || null);
+    setActiveTab('students');
+  };
+
+  const navigateToCompanies = (filter?: { status?: string; approvalStatus?: string }) => {
+    setCompanyInitialFilter(filter || null);
+    setActiveTab('companies');
+  };
 
   // Check if current URL is a public company registration link
   const getPublicRegistrationToken = () => {
@@ -86,15 +98,30 @@ export function App() {
         {/* Header & Tab Navigation */}
         <Navigation
           activeTab={activeTab}
-          setActiveTab={setActiveTab}
+          setActiveTab={(tab) => {
+            if (tab !== 'students') setStudentInitialFilter(null);
+            if (tab !== 'companies') setCompanyInitialFilter(null);
+            setActiveTab(tab);
+          }}
           currentUser={currentUser}
           onLogout={handleLogout}
         />
 
         {/* Main Content Area */}
         <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-          {activeTab === 'dashboard' && <DashboardTab setActiveTab={setActiveTab} />}
-          {activeTab === 'students' && <StudentDetailsTab currentUser={currentUser} />}
+          {activeTab === 'dashboard' && (
+            <DashboardTab 
+              setActiveTab={setActiveTab} 
+              navigateToStudents={navigateToStudents}
+              navigateToCompanies={navigateToCompanies}
+            />
+          )}
+          {activeTab === 'students' && (
+            <StudentDetailsTab 
+              currentUser={currentUser} 
+              initialFilter={studentInitialFilter}
+            />
+          )}
           {activeTab === 'faculties' && (
             <FacultyMembersTab
               currentUser={currentUser}
@@ -105,6 +132,7 @@ export function App() {
             <CompanyDetailsTab
               currentUser={currentUser}
               refreshTrigger={companyRefreshTrigger}
+              initialFilter={companyInitialFilter}
             />
           )}
           {activeTab === 'reports' && <ReportsTab currentUser={currentUser} />}

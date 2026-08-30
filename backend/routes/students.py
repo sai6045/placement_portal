@@ -153,7 +153,7 @@ def add_student():
             s_no=new_sno,
             reg_no=reg_no,
             name=name,
-            department=str(data.get('department') or data.get('dept') or 'CSE').strip(),
+            department=str(data.get('department') or data.get('dept') or 'N/A').strip(),
             gender=str(data.get('gender') or 'Male').strip(),
             hosteller_status=str(data.get('hosteller_status') or data.get('hosteller_day_scholar') or 'Day Scholar').strip(),
             sslc_percentage=sslc_pct,
@@ -197,9 +197,18 @@ def update_student(student_id):
             return jsonify({'error': 'Student not found'}), 404
 
         data = request.get_json() or {}
+        old_company_id = student.placed_company_id
 
         if 'name' in data:
             student.name = str(data['name']).strip()
+        if 'reg_no' in data and data['reg_no']:
+            new_reg = str(data['reg_no']).strip()
+            # check duplicate if changed
+            if new_reg.lower() != student.reg_no.lower():
+                dup = Student.query.filter(Student.reg_no.ilike(new_reg), Student.id != student.id).first()
+                if dup:
+                    return jsonify({'error': f'Registration number {new_reg} is already assigned to another student.'}), 409
+                student.reg_no = new_reg
         if 'department' in data or 'dept' in data:
             student.department = str(data.get('department') or data.get('dept')).strip()
         if 'gender' in data:
@@ -239,13 +248,32 @@ def update_student(student_id):
         if 'phone' in data or 'mobile_no' in data:
             student.phone = str(data.get('phone') or data.get('mobile_no')).strip()
         if 'placement_status' in data:
-            student.placement_status = str(data['placement_status']).strip()
+            new_status = str(data['placement_status']).strip()
+            student.placement_status = new_status
+            if new_status.upper() not in ('PLACED', 'YES'):
+                student.placed_company_id = None
+                student.placed_company = 'N/A'
+                student.placed_ctc_lpa = None
+                student.salary_package = 'N/A'
+                student.placement_date = ''
         if 'placed_company' in data:
             student.placed_company = str(data['placed_company']).strip()
         if 'salary_package' in data:
             student.salary_package = str(data['salary_package']).strip()
         if 'remarks' in data:
             student.remarks = str(data['remarks']).strip()
+
+        db.session.flush()
+
+        # Synchronize placed count for affected companies
+        if old_company_id:
+            old_comp = db.session.get(Company, old_company_id)
+            if old_comp:
+                old_comp.placed_students = old_comp.get_real_placed_count()
+        if student.placed_company_id and student.placed_company_id != old_company_id:
+            new_comp = db.session.get(Company, student.placed_company_id)
+            if new_comp:
+                new_comp.placed_students = new_comp.get_real_placed_count()
 
         db.session.commit()
         return jsonify({'message': 'Student updated successfully', 'student': student.to_full_dict()}), 200
@@ -458,7 +486,7 @@ def upload_excel():
         # Roll No / Reg No
         'reg_no':              ['Roll No', 'Roll Number', 'Reg No', 'Register No', 'Registration Number', 'reg_no', 'Reg. No', 'Reg.No'],
         'name':                ['Name', 'Student Name', 'Full Name', 'name'],
-        'department':          ['Department', 'Dept', 'dept', 'department'],
+        'department':          ['Department', 'Dept', 'dept', 'department', 'Branch', 'branch', 'Specialization', 'Course', 'Program', 'Programme', 'Major'],
         'gender':              ['Gender', 'gender'],
         'hosteller_status':    ['Student Type', 'Hosteller/Day Scholar', 'Hosteller / Day Scholar', 'hosteller/day_scholar',
                                 'Residence', 'Hosteller Status', 'hosteller_status', 'Type'],
@@ -634,7 +662,7 @@ def upload_excel():
                 reg_no = reg_no[:-2]
 
             # --- Build field values ---
-            dept = str_val(row, col_map['department'], 'CSE') or 'CSE'
+            dept = str_val(row, col_map['department']).strip() or 'N/A'
             gender = str_val(row, col_map['gender'], 'Male') or 'Male'
             hosteller_raw = str_val(row, col_map['hosteller_status'], 'Day Scholar')
             hosteller = normalize_hosteller(hosteller_raw)

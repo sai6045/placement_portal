@@ -54,6 +54,22 @@ export const ReportsTab: React.FC<ReportsTabProps> = ({ currentUser, refreshTrig
     return Array.from(set).sort();
   }, [studentsList]);
 
+  const availableDepartments = useMemo(() => {
+    const deptMap = new Map<string, string>();
+    studentsList.forEach(s => {
+      const d = (s.department || s.dept || '').trim();
+      if (d) {
+        const key = d.toLowerCase();
+        if (!deptMap.has(key)) {
+          deptMap.set(key, d);
+        }
+      }
+    });
+    return Array.from(deptMap.values()).sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: 'base' })
+    );
+  }, [studentsList]);
+
   const availableGradYears = useMemo(() => {
     const set = new Set<number>();
     studentsList.forEach(s => {
@@ -472,12 +488,9 @@ export const ReportsTab: React.FC<ReportsTabProps> = ({ currentUser, refreshTrig
                   className="w-full py-2 px-3 bg-white border border-[#E2E8F0] rounded-lg text-xs focus:ring-2 focus:ring-[#3B82F6]"
                 >
                   <option value="">All Departments</option>
-                  <option value="CSE">CSE</option>
-                  <option value="IT">IT</option>
-                  <option value="ECE">ECE</option>
-                  <option value="EEE">EEE</option>
-                  <option value="MECH">MECH</option>
-                  <option value="CIVIL">CIVIL</option>
+                  {availableDepartments.map(dept => (
+                    <option key={dept} value={dept}>{dept}</option>
+                  ))}
                 </select>
               </div>
 
