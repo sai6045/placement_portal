@@ -195,15 +195,18 @@ def get_companies():
 
         companies = query.order_by(Company.created_at.desc(), Company.id.desc()).all()
 
-        # Batch pre-fetch placed counts for all companies in 1 query
+        # Batch pre-fetch company-specific placed counts (Registered students placed in this company)
         placed_counts = dict(
             db.session.query(
-                Student.placed_company_id,
-                db.func.count(Student.id)
+                CompanyRegistration.company_id,
+                db.func.count(CompanyRegistration.id)
+            ).join(
+                Student, CompanyRegistration.student_id == Student.id
             ).filter(
-                Student.placed_company_id.isnot(None),
+                CompanyRegistration.registration_status == 'REGISTERED',
+                (Student.placed_company_id == CompanyRegistration.company_id),
                 (Student.placement_status == 'PLACED') | (Student.placement_status == 'Placed') | (Student.placement_status == 'YES')
-            ).group_by(Student.placed_company_id).all()
+            ).group_by(CompanyRegistration.company_id).all()
         )
 
         # Batch pre-fetch registration counts for all companies in 1 query
@@ -586,33 +589,42 @@ def get_company(company_id):
 
 @companies_bp.route('/<int:company_id>/placed-students', methods=['GET'])
 def get_company_placed_students(company_id):
-    """Retrieve actual students placed in this company directly from Supabase / database"""
+    """Retrieve actual registered students placed in this company directly from Supabase / database"""
     try:
         company = db.session.get(Company, company_id)
         if not company:
             return jsonify({'error': 'Company not found'}), 404
 
-        students = Student.query.filter(
-            (Student.placed_company_id == company.id) |
-            (Student.placed_company.ilike(company.name.strip()))
-        ).filter(
-            (Student.placement_status == 'PLACED') | (Student.placement_status == 'Placed') | (Student.placement_status == 'YES')
-        ).order_by(Student.name.asc()).all()
+        registrations = CompanyRegistration.query.filter(
+            CompanyRegistration.company_id == company.id,
+            CompanyRegistration.registration_status == 'REGISTERED'
+        ).all()
 
         placed_list = []
-        for s in students:
-            placed_list.append({
-                'id': s.id,
-                'reg_no': s.reg_no,
-                'name': s.name,
-                'department': s.department or s.dept or 'N/A',
-                'gender': s.gender or '',
-                'email': s.email or '',
-                'phone': s.phone or '',
-                'salary_package': s.salary_package or (f"{company.ctc_lpa} LPA" if company.ctc_lpa else 'N/A'),
-                'placed_ctc_lpa': s.placed_ctc_lpa or company.ctc_lpa,
-                'placement_date': s.placement_date or ''
-            })
+        for reg in registrations:
+            s = reg.student
+            if not s:
+                continue
+            is_placed_here = (
+                (s.placed_company_id == company.id or (s.placed_company and s.placed_company.strip().lower() == company.name.strip().lower())) and
+                (str(s.placement_status or '').strip().upper() in ('PLACED', 'YES'))
+            )
+            if is_placed_here:
+                placed_list.append({
+                    'id': s.id,
+                    'reg_no': s.reg_no,
+                    'name': s.name,
+                    'department': s.department or s.dept or 'N/A',
+                    'gender': s.gender or '',
+                    'email': s.email or '',
+                    'phone': s.phone or '',
+                    'salary_package': s.salary_package or (f"{company.ctc_lpa} LPA" if company.ctc_lpa else 'N/A'),
+                    'placed_ctc_lpa': s.placed_ctc_lpa or company.ctc_lpa,
+                    'placement_date': s.placement_date or ''
+                })
+
+        # Sort by student name
+        placed_list.sort(key=lambda x: x['name'].lower())
 
         return jsonify({
             'company_id': company.id,

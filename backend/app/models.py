@@ -219,12 +219,19 @@ class Company(db.Model):
         return self.no_of_hirings or self.employee_count or 0
 
     def get_real_placed_count(self):
-        """Authoritative calculation of placed students directly from Student placement records"""
+        """
+        Authoritative calculation of placed students for this specific company:
+        Counts registered students for this company who are placed in this company.
+        """
         try:
-            return db.session.query(db.func.count(Student.id)).filter(
-                Student.placed_company_id == self.id,
-                (Student.placement_status == 'PLACED') | (Student.placement_status == 'Placed') | (Student.placement_status == 'YES')
-            ).scalar() or 0
+            return db.session.query(db.func.count(CompanyRegistration.id))\
+                .join(Student, CompanyRegistration.student_id == Student.id)\
+                .filter(
+                    CompanyRegistration.company_id == self.id,
+                    CompanyRegistration.registration_status == 'REGISTERED',
+                    (Student.placed_company_id == self.id) | (Student.placed_company == self.name),
+                    (Student.placement_status == 'PLACED') | (Student.placement_status == 'Placed') | (Student.placement_status == 'YES')
+                ).scalar() or 0
         except Exception:
             return 0
 
@@ -306,6 +313,12 @@ class CompanyRegistration(db.Model):
 
     def to_dict(self):
         s = self.student
+        comp = self.company
+        is_placed_here = (
+            s is not None and
+            (s.placed_company_id == self.company_id or (s.placed_company and comp and s.placed_company.strip().lower() == comp.name.strip().lower())) and
+            (str(s.placement_status or '').strip().upper() in ('PLACED', 'YES'))
+        )
         return {
             'id': self.id,
             'company_id': self.company_id,
@@ -320,7 +333,9 @@ class CompanyRegistration(db.Model):
             'student_department': s.department or s.dept if s else '',
             'student_gender': s.gender if s else '',
             'student_type': s.hosteller_status or s.hosteller_day_scholar if s else '',
-            'placement_status': s.get_norm_placement_status() if s else 'YET_TO_BE_PLACED',
+            'placement_status': 'PLACED' if is_placed_here else 'YET_TO_BE_PLACED',
+            'global_placement_status': s.get_norm_placement_status() if s else 'YET_TO_BE_PLACED',
+            'is_placed_in_company': is_placed_here,
             'placed_company_id': s.placed_company_id if s else None,
             'placed_company_name': s.placed_company if s else None,
             'placed_ctc_lpa': s.placed_ctc_lpa if s else None

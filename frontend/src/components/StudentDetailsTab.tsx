@@ -59,6 +59,11 @@ export const StudentDetailsTab: React.FC<StudentDetailsTabProps> = ({ currentUse
   const [placementError, setPlacementError] = useState<string | null>(null);
   const [placementSuccess, setPlacementSuccess] = useState<string | null>(null);
 
+  // Terminate Placement Modal State
+  const [terminateModalStudent, setTerminateModalStudent] = useState<StudentSummary | null>(null);
+  const [terminatingPlacement, setTerminatingPlacement] = useState(false);
+  const [terminatePlacementError, setTerminatePlacementError] = useState<string | null>(null);
+
   // Delete Student Modal State
   const [deletingStudent, setDeletingStudent] = useState<StudentSummary | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -327,14 +332,11 @@ export const StudentDetailsTab: React.FC<StudentDetailsTabProps> = ({ currentUse
     setLoadingEligible(true);
 
     try {
-      const comps = await api.getCompanies({
-        status: 'Drive Completed',
-        approval_status: 'APPROVED'
-      });
+      const comps = await api.getEligiblePlacementCompanies(student.id);
       setEligibleCompanies(comps);
     } catch (err: any) {
       console.error('Failed to load eligible companies:', err);
-      setPlacementError('Failed to fetch eligible companies.');
+      setPlacementError('Failed to fetch eligible companies for this student.');
     } finally {
       setLoadingEligible(false);
     }
@@ -365,6 +367,26 @@ export const StudentDetailsTab: React.FC<StudentDetailsTabProps> = ({ currentUse
       setPlacementError(err.response?.data?.error || err.response?.data?.details || 'Failed to place student.');
     } finally {
       setPlacing(false);
+    }
+  };
+
+  const handleOpenTerminateModal = (student: StudentSummary) => {
+    setTerminateModalStudent(student);
+    setTerminatePlacementError(null);
+  };
+
+  const handleConfirmTerminatePlacement = async () => {
+    if (!terminateModalStudent) return;
+    setTerminatingPlacement(true);
+    setTerminatePlacementError(null);
+    try {
+      await api.terminateStudentPlacement(terminateModalStudent.id);
+      setTerminateModalStudent(null);
+      fetchStudents();
+    } catch (err: any) {
+      setTerminatePlacementError(err.response?.data?.error || err.response?.data?.details || 'Failed to terminate student placement.');
+    } finally {
+      setTerminatingPlacement(false);
     }
   };
 
@@ -853,20 +875,18 @@ export const StudentDetailsTab: React.FC<StudentDetailsTabProps> = ({ currentUse
                                   <span>Edit Student Details</span>
                                 </button>
 
-                                {/* 2. Place Student */}
+                                {/* 2. Place Student / Terminate Placement */}
                                 {isPlaced ? (
                                   <button
-                                    disabled
-                                    className="w-full px-3.5 py-2 text-xs font-semibold text-slate-400 flex items-center justify-between cursor-not-allowed bg-slate-50/60 text-left"
-                                    title={`Already Placed at ${student.placed_company || 'company'}`}
+                                    onClick={() => {
+                                      setActiveMenuStudentId(null);
+                                      handleOpenTerminateModal(student);
+                                    }}
+                                    className="w-full px-3.5 py-2 text-xs font-semibold text-rose-700 hover:text-rose-800 hover:bg-rose-50 flex items-center gap-2.5 transition text-left"
+                                    title={`Terminate placement at ${student.placed_company || 'company'}`}
                                   >
-                                    <span className="flex items-center gap-2.5">
-                                      <Building2 className="h-3.5 w-3.5 text-slate-400 shrink-0" />
-                                      <span>Place Student</span>
-                                    </span>
-                                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
-                                      Placed
-                                    </span>
+                                    <Building2 className="h-3.5 w-3.5 text-rose-600 shrink-0" />
+                                    <span>Terminate Placement</span>
                                   </button>
                                 ) : (
                                   <button
@@ -1299,7 +1319,7 @@ export const StudentDetailsTab: React.FC<StudentDetailsTabProps> = ({ currentUse
                   <div className="p-2 text-center text-[#64748B] text-xs">Loading approved companies...</div>
                 ) : eligibleCompanies.length === 0 ? (
                   <div className="p-2.5 bg-amber-50 border border-amber-200 text-amber-800 rounded-lg text-[11px]">
-                    No approved companies with "Drive Completed" status are currently available in Supabase.
+                    No eligible registered companies with "Drive Completed" status and available hiring capacity were found for this student.
                   </div>
                 ) : (
                   <select
@@ -1886,6 +1906,81 @@ export const StudentDetailsTab: React.FC<StudentDetailsTabProps> = ({ currentUse
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 {isBulkDeleting ? 'Deleting...' : `Delete ${selectedStudentIds.length} Students`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TERMINATE PLACEMENT CONFIRMATION MODAL */}
+      {terminateModalStudent && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 border border-[#E2E8F0] space-y-4 animate-in fade-in zoom-in-95 duration-100">
+            <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0]">
+              <div className="flex items-center gap-2.5 text-rose-600">
+                <div className="p-2 bg-rose-50 rounded-lg">
+                  <Building2 className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-[#1E293B] text-base">Terminate Placement?</h3>
+                  <p className="text-xs text-[#64748B]">Remove placement record and recalculate counts</p>
+                </div>
+              </div>
+              <button
+                onClick={() => { setTerminateModalStudent(null); setTerminatePlacementError(null); }}
+                className="p-1 hover:bg-[#F8FAFC] rounded-lg text-[#64748B]"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <p className="text-[#1E293B] font-medium">
+                Are you sure you want to terminate this student's placement?
+              </p>
+
+              <div className="bg-[#F8FAFC] p-3.5 rounded-lg border border-[#E2E8F0] space-y-2 font-medium">
+                <div className="flex justify-between">
+                  <span className="text-[#64748B]">Student:</span>
+                  <span className="font-bold text-[#1E293B]">{terminateModalStudent.name} <span className="font-mono text-[#3B82F6] font-normal">({terminateModalStudent.reg_no})</span></span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-[#64748B]">Company:</span>
+                  <span className="font-bold text-rose-700">{terminateModalStudent.placed_company || 'Assigned Company'}</span>
+                </div>
+              </div>
+
+              <div className="p-3 bg-amber-50 border border-amber-300 rounded-lg flex items-start gap-2.5 text-amber-900">
+                <AlertCircle className="h-4 w-4 shrink-0 text-amber-600 mt-0.5" />
+                <p className="font-semibold leading-relaxed">
+                  Terminating this placement will decrease the company's placed students count and update Reports & Dashboard statistics immediately.
+                </p>
+              </div>
+
+              {terminatePlacementError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-center gap-2 text-rose-700 font-medium">
+                  <AlertCircle className="h-4 w-4 shrink-0 text-rose-500" />
+                  <span>{terminatePlacementError}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="pt-3 flex justify-end gap-2 border-t border-[#E2E8F0]">
+              <button
+                type="button"
+                onClick={() => { setTerminateModalStudent(null); setTerminatePlacementError(null); }}
+                className="px-3.5 py-2 bg-white text-[#64748B] font-semibold text-xs rounded-lg hover:bg-[#F8FAFC] border border-[#E2E8F0]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmTerminatePlacement}
+                disabled={terminatingPlacement}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-lg shadow-sm disabled:opacity-50 transition flex items-center gap-1.5"
+              >
+                <Building2 className="h-3.5 w-3.5" />
+                {terminatingPlacement ? 'Terminating...' : 'Terminate Placement'}
               </button>
             </div>
           </div>

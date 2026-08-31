@@ -6,7 +6,7 @@ import pandas as pd
 from flask import Blueprint, request, jsonify, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt
 from app.extensions import db
-from app.models import Student, Company, User
+from app.models import Student, Company, User, CompanyRegistration
 
 students_bp = Blueprint('students', __name__)
 
@@ -265,12 +265,30 @@ def update_student(student_id):
 
         db.session.flush()
 
+        # If student is placed, ensure company registration relationship exists
+        if student.placed_company_id and student.get_norm_placement_status() == 'PLACED':
+            p_comp = db.session.get(Company, student.placed_company_id)
+            if p_comp:
+                reg = CompanyRegistration.query.filter_by(company_id=p_comp.id, student_id=student.id).first()
+                if not reg:
+                    db.session.add(CompanyRegistration(
+                        company_id=p_comp.id,
+                        student_id=student.id,
+                        registration_status='REGISTERED',
+                        resume_link=student.resume_link,
+                        registered_email=student.email,
+                        registered_mobile=student.phone
+                    ))
+                    db.session.flush()
+                else:
+                    reg.registration_status = 'REGISTERED'
+
         # Synchronize placed count for affected companies
         if old_company_id:
             old_comp = db.session.get(Company, old_company_id)
             if old_comp:
                 old_comp.placed_students = old_comp.get_real_placed_count()
-        if student.placed_company_id and student.placed_company_id != old_company_id:
+        if student.placed_company_id:
             new_comp = db.session.get(Company, student.placed_company_id)
             if new_comp:
                 new_comp.placed_students = new_comp.get_real_placed_count()
@@ -394,10 +412,76 @@ def bulk_delete_students():
         print(f"[ERROR] bulk_delete_students failed: {traceback.format_exc()}")
         return jsonify({'error': 'Failed to bulk delete selected students.', 'details': str(e)}), 500
 
+@students_bp.route('/<int:student_id>/eligible-placement-companies', methods=['GET'])
+@jwt_required()
+def get_eligible_placement_companies(student_id):
+    """
+    Return ONLY companies that the student has actively registered for,
+    which are approved Drive Completed drives with available hiring capacity.
+    """
+    try:
+        student = db.session.get(Student, student_id)
+        if not student:
+            return jsonify({'error': 'Student not found.'}), 404
+
+        # Query all active registrations for this student
+        registrations = CompanyRegistration.query.filter(
+            CompanyRegistration.student_id == student.id,
+            CompanyRegistration.registration_status == 'REGISTERED'
+        ).all()
+
+        eligible = []
+        for reg in registrations:
+            comp = reg.company
+            if not comp:
+                continue
+
+            # Company must be APPROVED and Drive Completed
+            is_approved = (comp.approval_status or 'PENDING').upper() == 'APPROVED'
+            is_completed = (comp.status or '') == 'Drive Completed'
+            if not (is_approved and is_completed):
+                continue
+
+            # Student must not already be placed in this company
+            is_placed_here = (
+                (student.placed_company_id == comp.id or (student.placed_company and student.placed_company.strip().lower() == comp.name.strip().lower())) and
+                (str(student.placement_status or '').strip().upper() in ('PLACED', 'YES'))
+            )
+            if is_placed_here:
+                continue
+
+            real_placed = comp.get_real_placed_count()
+            hirings = comp.no_of_hirings if comp.no_of_hirings is not None else (comp.employee_count or 0)
+            remaining_slots = max(0, hirings - real_placed)
+
+            # Filter out if hiring capacity is filled
+            if hirings > 0 and real_placed >= hirings:
+                continue
+
+            comp_dict = comp.to_dict(placed_count=real_placed)
+            comp_dict.update({
+                'company_id': comp.id,
+                'company_name': comp.name,
+                'placed_count': real_placed,
+                'remaining_slots': remaining_slots,
+                'registration_status': reg.registration_status,
+                'placement_status': 'PLACED' if is_placed_here else 'YET_TO_BE_PLACED'
+            })
+            eligible.append(comp_dict)
+
+        # Sort by company name
+        eligible.sort(key=lambda x: (x.get('name') or '').lower())
+
+        return jsonify(eligible), 200
+
+    except Exception as e:
+        print(f"[ERROR] get_eligible_placement_companies failed: {traceback.format_exc()}")
+        return jsonify({'error': 'Failed to retrieve eligible placement companies.', 'details': str(e)}), 500
+
 @students_bp.route('/<int:student_id>/placement', methods=['POST'])
 @jwt_required()
 def place_student(student_id):
-    """Mark a student as PLACED in an approved 'Drive Completed' company"""
+    """Mark a student as PLACED in an approved 'Drive Completed' company that they registered for"""
     try:
         student = db.session.get(Student, student_id)
         if not student:
@@ -421,24 +505,30 @@ def place_student(student_id):
         if not company:
             return jsonify({'error': 'Selected company not found.'}), 404
 
-        # Verification: Company must be APPROVED and Drive Completed
+        # Verification 1: Student must have registered for this company
+        existing_reg = CompanyRegistration.query.filter_by(
+            company_id=company.id,
+            student_id=student.id,
+            registration_status='REGISTERED'
+        ).first()
+
+        if not existing_reg:
+            return jsonify({'error': 'Student is not registered for this company.'}), 400
+
+        # Verification 2: Company must be APPROVED and Drive Completed
         approval_st = (company.approval_status or 'PENDING').upper()
         rel_st = company.status or 'Cold'
 
         if approval_st != 'APPROVED' or rel_st != 'Drive Completed':
             return jsonify({'error': 'This company is not an approved completed placement drive.'}), 400
 
-        # Hiring limit check
-        placed_count = Student.query.filter(
-            Student.placed_company_id == company.id,
-            Student.placement_status == 'PLACED'
-        ).count()
-
+        # Verification 3: Hiring limit check using company's real placed count
+        real_placed_count = company.get_real_placed_count()
         hirings_limit = company.no_of_hirings if company.no_of_hirings is not None else (company.employee_count or 0)
-        if hirings_limit > 0 and placed_count >= hirings_limit:
+        if hirings_limit > 0 and real_placed_count >= hirings_limit:
             return jsonify({'error': "This company's hiring limit has been reached."}), 400
 
-        # Update student placement
+        # Update student placement details
         ctc_val = company.ctc_lpa if company.ctc_lpa is not None else 0.0
         placement_date_str = datetime.utcnow().strftime('%d-%m-%Y')
 
@@ -449,8 +539,10 @@ def place_student(student_id):
         student.salary_package = f"{ctc_val} LPA"
         student.placement_date = placement_date_str
 
-        # Synchronize company's placed_students count
-        company.placed_students = placed_count + 1
+        db.session.flush()
+
+        # Synchronize company's placed_students count from actual registered & placed records
+        company.placed_students = company.get_real_placed_count()
 
         db.session.commit()
 
@@ -464,6 +556,47 @@ def place_student(student_id):
         db.session.rollback()
         print(f"[ERROR] place_student failed: {traceback.format_exc()}")
         return jsonify({'error': 'Failed to complete student placement.', 'details': str(e)}), 500
+
+@students_bp.route('/<int:student_id>/placement', methods=['DELETE'])
+@students_bp.route('/<int:student_id>/terminate-placement', methods=['POST', 'DELETE'])
+@jwt_required()
+def terminate_student_placement(student_id):
+    """Terminate / remove a student's placement record and synchronize company and reports count"""
+    try:
+        student = db.session.get(Student, student_id)
+        if not student:
+            return jsonify({'error': 'Student not found.'}), 404
+
+        old_company_id = student.placed_company_id
+        old_company_name = student.placed_company or 'Company'
+
+        # Reset placement fields
+        student.placement_status = 'YET_TO_BE_PLACED'
+        student.placed_company_id = None
+        student.placed_company = 'N/A'
+        student.placed_ctc_lpa = None
+        student.salary_package = 'N/A'
+        student.placement_date = ''
+
+        db.session.flush()
+
+        # Recalculate and synchronize placed count for the affected company
+        if old_company_id:
+            comp = db.session.get(Company, old_company_id)
+            if comp:
+                comp.placed_students = comp.get_real_placed_count()
+
+        db.session.commit()
+
+        return jsonify({
+            'message': f"Placement for '{student.name}' at '{old_company_name}' has been terminated.",
+            'student': student.to_full_dict()
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"[ERROR] terminate_student_placement failed: {traceback.format_exc()}")
+        return jsonify({'error': 'Failed to terminate student placement.', 'details': str(e)}), 500
 
 @students_bp.route('/upload', methods=['POST'])
 def upload_excel():

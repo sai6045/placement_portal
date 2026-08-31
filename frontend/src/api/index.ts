@@ -66,8 +66,16 @@ export const api = {
     const res = await axios.put(`${API_BASE}/students/${id}`, data);
     return res.data.student;
   },
+  getEligiblePlacementCompanies: async (studentId: number): Promise<Company[]> => {
+    const res = await axios.get(`${API_BASE}/students/${studentId}/eligible-placement-companies`);
+    return res.data;
+  },
   placeStudent: async (studentId: number, companyId: number): Promise<{ message: string; student: StudentFull; company: Company }> => {
     const res = await axios.post(`${API_BASE}/students/${studentId}/placement`, { company_id: companyId });
+    return res.data;
+  },
+  terminateStudentPlacement: async (studentId: number): Promise<{ message: string; student: StudentFull }> => {
+    const res = await axios.delete(`${API_BASE}/students/${studentId}/placement`);
     return res.data;
   },
   uploadStudentExcel: async (file: File): Promise<{ message: string; added: number; updated: number; skipped: number; errors: any[]; stats?: { total_students: number; placed: number; yet_to_be_placed: number } }> => {
